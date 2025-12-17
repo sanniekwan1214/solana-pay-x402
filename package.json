@@ -1,0 +1,74 @@
+{
+  "name": "solana-pay-x402",
+  "version": "0.1.0",
+  "description": "Express middleware for integrating Solana Pay with x402 HTTP payment protocol",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs"
+    },
+    "./express": {
+      "types": "./dist/express/index.d.ts",
+      "require": "./dist/express/index.js",
+      "import": "./dist/express/index.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "lint": "eslint src/**/*.ts",
+    "prepublishOnly": "npm run build",
+    "demo": "node demo/server.js",
+    "demo:dev": "npm run build && npm run demo"
+  },
+  "keywords": [
+    "solana",
+    "solana-pay",
+    "x402",
+    "payments",
+    "crypto",
+    "middleware",
+    "express"
+  ],
+  "author": "",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/solana-pay-x402.git"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "express": "^4.18.0 || ^5.0.0"
+  },
+  "dependencies": {
+    "@solana/pay": "^0.2.5",
+    "@solana/spl-token": "^0.4.0",
+    "@solana/web3.js": "^1.95.0",
+    "bignumber.js": "^9.3.1",
+    "x402-solana": "^0.1.5",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/bignumber.js": "^5.0.4",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "eslint": "^8.56.0",
+    "express": "^4.18.2",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
