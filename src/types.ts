@@ -1,6 +1,58 @@
 import { PublicKey } from '@solana/web3.js'
 
 /**
+ * Store for tracking used payment signatures to prevent replay attacks
+ */
+export interface SignatureStore {
+  has(signature: string): Promise<boolean> | boolean
+  add(signature: string, ttlMs?: number): Promise<void> | void
+}
+
+/**
+ * In-memory signature store (use Redis or database in production)
+ */
+export class InMemorySignatureStore implements SignatureStore {
+  private signatures = new Map<string, number>()
+  private cleanupInterval: ReturnType<typeof setInterval> | null = null
+
+  constructor(cleanupIntervalMs = 60000) {
+    this.cleanupInterval = setInterval(() => this.cleanup(), cleanupIntervalMs)
+  }
+
+  has(signature: string): boolean {
+    return this.signatures.has(signature)
+  }
+
+  add(signature: string, ttlMs = 3600000): void {
+    this.signatures.set(signature, Date.now() + ttlMs)
+  }
+
+  private cleanup(): void {
+    const now = Date.now()
+    for (const [sig, expiry] of this.signatures) {
+      if (expiry < now) {
+        this.signatures.delete(sig)
+      }
+    }
+  }
+
+  destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval)
+      this.cleanupInterval = null
+    }
+  }
+}
+
+/**
+ * SPL token configuration with decimals
+ */
+export interface SplTokenConfig {
+  mint: string | PublicKey
+  decimals: number
+}
+
+/**
  * Configuration for Solana Pay x402 integration
  */
 export interface SolanaPayX402Config {
@@ -10,8 +62,8 @@ export interface SolanaPayX402Config {
   recipient: string | PublicKey
   /** x402 facilitator API endpoint (default: https://facilitator.payai.network) */
   facilitatorUrl?: string
-  /** SPL Token mint address for payments (optional, defaults to SOL) */
-  splToken?: string | PublicKey
+  /** SPL Token configuration (optional, defaults to SOL) */
+  splToken?: SplTokenConfig
   /** Network: 'mainnet-beta' | 'devnet' | 'testnet' */
   network?: 'mainnet-beta' | 'devnet' | 'testnet'
   /** Label for the payment (appears in wallet) */
@@ -20,6 +72,8 @@ export interface SolanaPayX402Config {
   message?: string
   /** Enable automatic settlement via facilitator (default: true) */
   autoSettle?: boolean
+  /** Signature store for replay attack prevention */
+  signatureStore?: SignatureStore
 }
 
 /**
@@ -51,16 +105,30 @@ export interface SolanaPayUrl {
 }
 
 /**
- * x402 payment challenge (HTTP 402 response)
- * Note: Using any type here as x402-solana handles this internally
+ * x402 payment requirements structure
  */
-export type X402Challenge = any
+export interface X402PaymentRequirements {
+  scheme: string
+  network: string
+  maxAmountRequired: string
+  resource: string
+  description: string
+  mimeType?: string
+  payTo: string
+  maxTimeoutSeconds: number
+  asset: string
+  outputSchema?: unknown
+  extra?: Record<string, unknown>
+}
 
 /**
- * x402 payment proof (submitted by client)
- * Note: Using any type here as x402-solana handles this internally
+ * x402 payment header structure
  */
-export type X402PaymentProof = any
+export interface X402PaymentHeader {
+  signature: string
+  chainId?: string
+  scheme?: string
+}
 
 /**
  * Payment verification result

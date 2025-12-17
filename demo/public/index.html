@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>x402 Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+      background: #0d1117;
+      color: #c9d1d9;
+      min-height: 100vh;
+      padding: 24px;
+      font-size: 14px;
+    }
+    .container { max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 16px; font-weight: 600; color: #58a6ff; margin-bottom: 8px; }
+    .subtitle { color: #8b949e; margin-bottom: 24px; font-size: 12px; }
+    .network-badge {
+      display: inline-block;
+      background: #238636;
+      color: #fff;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 11px;
+      margin-left: 8px;
+    }
+    .network-badge.devnet { background: #9e6a03; }
+    .section { margin-bottom: 24px; }
+    .section-title { color: #8b949e; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+    .endpoints { display: flex; flex-direction: column; gap: 8px; }
+    .endpoint {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 12px 16px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .endpoint:hover { border-color: #58a6ff; }
+    .endpoint.selected { border-color: #58a6ff; background: #1c2128; }
+    .endpoint-path { color: #58a6ff; }
+    .endpoint-price { color: #7ee787; font-weight: 500; }
+    .btn {
+      background: #238636;
+      color: #fff;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      width: 100%;
+      transition: background 0.15s;
+    }
+    .btn:hover { background: #2ea043; }
+    .btn:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+    .btn-secondary { background: #30363d; }
+    .btn-secondary:hover { background: #3c444d; }
+    .panel {
+      display: none;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+    .panel.active { display: block; }
+    .qr-wrap { text-align: center; padding: 16px; background: #fff; border-radius: 6px; margin: 16px 0; }
+    .url-box {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 12px;
+      font-size: 11px;
+      word-break: break-all;
+      color: #8b949e;
+      margin: 12px 0;
+      max-height: 80px;
+      overflow-y: auto;
+    }
+    .actions { display: flex; gap: 8px; margin-top: 12px; }
+    .actions .btn { flex: 1; }
+    .steps {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 12px;
+      margin: 16px 0;
+      font-size: 12px;
+      color: #8b949e;
+    }
+    .steps ol { padding-left: 20px; }
+    .steps li { margin: 6px 0; }
+    .result {
+      display: none;
+      border-radius: 6px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+    .result.active { display: block; }
+    .result.success { background: #0d1117; border: 1px solid #238636; }
+    .result.error { background: #0d1117; border: 1px solid #f85149; }
+    .result-title { font-size: 12px; margin-bottom: 8px; }
+    .result.success .result-title { color: #7ee787; }
+    .result.error .result-title { color: #f85149; }
+    .result pre {
+      background: #161b22;
+      padding: 12px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 11px;
+      color: #c9d1d9;
+    }
+    .log { margin-top: 24px; }
+    .log-title { color: #8b949e; font-size: 11px; margin-bottom: 8px; }
+    .log-box {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 12px;
+      font-size: 11px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .log-entry { margin: 4px 0; }
+    .log-entry .time { color: #484f58; }
+    .log-entry .info { color: #58a6ff; }
+    .log-entry .ok { color: #7ee787; }
+    .log-entry .err { color: #f85149; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Solana Pay x402 <span class="network-badge" id="networkBadge">mainnet</span></h1>
+    <p class="subtitle">HTTP 402 Payment Required Demo</p>
+
+    <div class="section">
+      <div class="section-title">Endpoints</div>
+      <div class="endpoints">
+        <div class="endpoint" onclick="select('/api/content', 0.0001)">
+          <span class="endpoint-path">GET /api/content</span>
+          <span class="endpoint-price">0.0001 SOL</span>
+        </div>
+        <div class="endpoint" onclick="select('/api/data/basic', 0.0005)">
+          <span class="endpoint-path">GET /api/data/basic</span>
+          <span class="endpoint-price">0.0005 SOL</span>
+        </div>
+        <div class="endpoint" onclick="select('/api/data/premium', 0.001)">
+          <span class="endpoint-path">GET /api/data/premium</span>
+          <span class="endpoint-price">0.001 SOL</span>
+        </div>
+        <div class="endpoint" onclick="select('/api/data/enterprise', 0.005)">
+          <span class="endpoint-path">GET /api/data/enterprise</span>
+          <span class="endpoint-price">0.005 SOL</span>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn" id="reqBtn" onclick="request()" disabled>Select endpoint</button>
+
+    <div class="panel" id="payPanel">
+      <div class="section-title">Payment Required (HTTP 402)</div>
+      <div class="qr-wrap"><div id="qr"></div></div>
+      <div class="url-box" id="urlBox"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" onclick="copy()">Copy URL</button>
+        <button class="btn btn-secondary" onclick="open_()">Open Wallet</button>
+      </div>
+      <div class="steps">
+        <ol>
+          <li>Scan QR with Phantom/Solflare</li>
+          <li>Approve transaction</li>
+          <li>Copy signature, click Verify</li>
+        </ol>
+      </div>
+      <button class="btn" onclick="verify()">Verify Payment</button>
+    </div>
+
+    <div class="result" id="result">
+      <div class="result-title" id="resultTitle"></div>
+      <pre id="resultData"></pre>
+    </div>
+
+    <div class="log">
+      <div class="log-title">Console</div>
+      <div class="log-box" id="logBox"></div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script>
+    let ep = null, data = null, network = 'mainnet-beta'
+    const $ = id => document.getElementById(id)
+
+    fetch('/api/health').then(r => r.json()).then(d => {
+      network = d.network
+      $('networkBadge').textContent = d.network === 'devnet' ? 'devnet' : 'mainnet'
+      if (d.network === 'devnet') $('networkBadge').classList.add('devnet')
+      log('info', `Connected: ${d.network}, wallet: ${d.wallet.slice(0,8)}...`)
+    }).catch(() => log('err', 'Failed to connect'))
+
+    function log(type, msg) {
+      const t = new Date().toLocaleTimeString()
+      $('logBox').innerHTML += `<div class="log-entry"><span class="time">${t}</span> <span class="${type}">${msg}</span></div>`
+      $('logBox').scrollTop = $('logBox').scrollHeight
+    }
+
+    function select(path, price) {
+      ep = { path, price }
+      document.querySelectorAll('.endpoint').forEach(e => e.classList.remove('selected'))
+      event.currentTarget.classList.add('selected')
+      $('reqBtn').disabled = false
+      $('reqBtn').textContent = `Request ${path}`
+      $('payPanel').classList.remove('active')
+      $('result').classList.remove('active', 'success', 'error')
+      log('info', `Selected: ${path} (${price} SOL)`)
+    }
+
+    async function request() {
+      if (!ep) return
+      log('info', `GET ${ep.path}`)
+      $('reqBtn').disabled = true
+
+      try {
+        const r = await fetch(ep.path)
+        if (r.status === 402) {
+          data = await r.json()
+          log('ok', `402 Payment Required`)
+          $('qr').innerHTML = ''
+          new QRCode($('qr'), { text: data.solanaPay.url, width: 200, height: 200, correctLevel: QRCode.CorrectLevel.L })
+          $('urlBox').textContent = data.solanaPay.url
+          $('payPanel').classList.add('active')
+        } else {
+          const d = await r.json()
+          log('ok', `${r.status} OK`)
+          show(true, d)
+        }
+      } catch (e) {
+        log('err', e.message)
+        show(false, { error: e.message })
+      }
+      $('reqBtn').disabled = false
+      $('reqBtn').textContent = `Request ${ep.path}`
+    }
+
+    function copy() {
+      navigator.clipboard.writeText(data.solanaPay.url)
+      log('info', 'URL copied')
+    }
+
+    function open_() {
+      window.location.href = data.solanaPay.url
+    }
+
+    async function verify() {
+      const sig = prompt('Transaction signature:')
+      if (!sig) return
+      log('info', `Verifying: ${sig.slice(0,16)}...`)
+
+      try {
+        const r = await fetch(ep.path, {
+          headers: {
+            'X-Payment': JSON.stringify({ signature: sig, scheme: 'exact' })
+          }
+        })
+        const d = await r.json()
+        if (r.ok) {
+          log('ok', 'Payment verified')
+          show(true, d)
+        } else {
+          log('err', d.message || 'Verification failed')
+          show(false, d)
+        }
+      } catch (e) {
+        log('err', e.message)
+        show(false, { error: e.message })
+      }
+    }
+
+    function show(ok, d) {
+      $('result').className = `result active ${ok ? 'success' : 'error'}`
+      $('resultTitle').textContent = ok ? 'Success' : 'Error'
+      $('resultData').textContent = JSON.stringify(d, null, 2)
+    }
+  </script>
+</body>
+</html>

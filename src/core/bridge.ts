@@ -1,4 +1,4 @@
-import { Connection, PublicKey, LAMPORTS_PER_SOL, Keypair } from '@solana/web3.js'
+import { Connection, PublicKey, Keypair } from '@solana/web3.js'
 import { encodeURL } from '@solana/pay'
 import BigNumber from 'bignumber.js'
 import { X402PaymentHandler } from 'x402-solana/server'
@@ -6,34 +6,95 @@ import type {
   SolanaPayX402Config,
   PaymentRequest,
   SolanaPayUrl,
-  PaymentVerification
+  PaymentVerification,
+  SignatureStore,
+  X402PaymentRequirements,
+  X402PaymentHeader,
 } from '../types'
+import { InMemorySignatureStore } from '../types'
+
+const SOL_DECIMALS = 9
+const SOL_MINT = 'So11111111111111111111111111111111111111112'
+
+function isValidSolanaAddress(address: string): boolean {
+  try {
+    new PublicKey(address)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isValidUrl(url: string): boolean {
+  try {
+    new URL(url)
+    return true
+  } catch {
+    return false
+  }
+}
 
 /**
  * Core bridge between Solana Pay and x402 protocol
- * Combines Solana Pay's familiar URL/QR flow with x402's HTTP payment verification
  */
 export class SolanaPayX402Bridge {
   private connection: Connection
   private x402Handler: X402PaymentHandler
-  private config: Required<Omit<SolanaPayX402Config, 'splToken' | 'message' | 'facilitatorUrl' | 'autoSettle'>> &
-    Pick<SolanaPayX402Config, 'splToken' | 'message' | 'facilitatorUrl' | 'autoSettle'>
+  private signatureStore: SignatureStore
+  private config: {
+    recipient: PublicKey
+    network: 'mainnet-beta' | 'devnet' | 'testnet'
+    label: string
+    rpcUrl: string
+    facilitatorUrl?: string
+    autoSettle: boolean
+    splToken?: { mint: PublicKey; decimals: number }
+    message?: string
+  }
 
   constructor(config: SolanaPayX402Config) {
-    this.connection = new Connection(config.rpcUrl, 'confirmed')
+    if (!config.rpcUrl || !isValidUrl(config.rpcUrl)) {
+      throw new Error('Invalid RPC URL')
+    }
 
-    const recipientPubkey = typeof config.recipient === 'string'
-      ? new PublicKey(config.recipient)
-      : config.recipient
+    const recipientStr = typeof config.recipient === 'string'
+      ? config.recipient
+      : config.recipient.toString()
+
+    if (!isValidSolanaAddress(recipientStr)) {
+      throw new Error('Invalid recipient address')
+    }
+
+    this.connection = new Connection(config.rpcUrl, 'confirmed')
+    this.signatureStore = config.signatureStore || new InMemorySignatureStore()
+
+    const recipientPubkey = new PublicKey(recipientStr)
+
+    let splTokenConfig: { mint: PublicKey; decimals: number } | undefined
+    if (config.splToken) {
+      const mintStr = typeof config.splToken.mint === 'string'
+        ? config.splToken.mint
+        : config.splToken.mint.toString()
+
+      if (!isValidSolanaAddress(mintStr)) {
+        throw new Error('Invalid SPL token mint address')
+      }
+
+      splTokenConfig = {
+        mint: new PublicKey(mintStr),
+        decimals: config.splToken.decimals,
+      }
+    }
 
     this.config = {
-      ...config,
       recipient: recipientPubkey,
       network: config.network || 'mainnet-beta',
       label: config.label || 'Payment',
       rpcUrl: config.rpcUrl,
       facilitatorUrl: config.facilitatorUrl,
       autoSettle: config.autoSettle !== false,
+      splToken: splTokenConfig,
+      message: config.message,
     }
 
     const x402Network = this.config.network === 'devnet' ? 'solana-devnet' : 'solana'
@@ -47,32 +108,25 @@ export class SolanaPayX402Bridge {
 
   /**
    * Create x402 payment requirements for a request
-   * This creates the full x402 response including Solana Pay URL
    */
   async createPaymentChallenge(payment: PaymentRequest, resource: string) {
+    const decimals = this.config.splToken?.decimals ?? SOL_DECIMALS
+    const tokenAddress = this.config.splToken?.mint.toString() ?? SOL_MINT
+
     const amount = typeof payment.amount === 'number'
       ? payment.amount.toString()
       : payment.amount
 
-    const tokenAddress = this.config.splToken
-      ? (typeof this.config.splToken === 'string' ? this.config.splToken : this.config.splToken.toString())
-      : undefined
-
-    const priceConfig = tokenAddress
-      ? {
-          amount,
-          asset: { address: tokenAddress, decimals: 9 },
-        }
-      : {
-          amount,
-          asset: { address: 'So11111111111111111111111111111111111111112', decimals: 9 },
-        }
+    const priceConfig = {
+      amount,
+      asset: { address: tokenAddress, decimals },
+    }
 
     const paymentRequirements = await this.x402Handler.createPaymentRequirements({
       price: priceConfig,
       network: this.config.network === 'devnet' ? 'solana-devnet' : 'solana',
       config: {
-        description: payment.label || this.config.label || 'Payment',
+        description: payment.label || this.config.label,
         resource: resource as `${string}://${string}`,
       },
     })
@@ -87,135 +141,114 @@ export class SolanaPayX402Bridge {
 
   /**
    * Create a Solana Pay URL from a payment request
-   * This generates the solana: URL that wallets understand for QR codes
+   * Amount should be in lamports (or smallest token unit)
    */
   async createSolanaPayUrl(payment: PaymentRequest): Promise<SolanaPayUrl> {
     const reference = payment.reference
       ? new PublicKey(payment.reference)
       : Keypair.generate().publicKey
-    const recipient = this.config.recipient
 
-    const amountValue = typeof payment.amount === 'number'
-      ? payment.amount / LAMPORTS_PER_SOL
-      : parseFloat(payment.amount) / LAMPORTS_PER_SOL
+    const decimals = this.config.splToken?.decimals ?? SOL_DECIMALS
+    const rawAmount = typeof payment.amount === 'number'
+      ? payment.amount
+      : parseFloat(payment.amount)
 
-    const amount = new BigNumber(amountValue)
+    // Convert from smallest unit to display unit
+    const displayAmount = new BigNumber(rawAmount).dividedBy(Math.pow(10, decimals))
 
-    console.log('[Solana Pay URL] Building URL with:', {
-      recipient: recipient.toString(),
-      amount: amount.toString(),
-      reference: reference.toString(),
+    const urlParams: Parameters<typeof encodeURL>[0] = {
+      recipient: this.config.recipient,
+      amount: displayAmount,
+      reference,
       label: payment.label || this.config.label,
       message: payment.memo || this.config.message,
-    })
+    }
 
     if (this.config.splToken) {
-      const splToken = typeof this.config.splToken === 'string'
-        ? new PublicKey(this.config.splToken)
-        : this.config.splToken
+      urlParams.splToken = this.config.splToken.mint
+    }
 
-      const url = encodeURL({
-        recipient: recipient as PublicKey,
-        amount,
-        splToken,
-        reference,
-        label: payment.label || this.config.label,
-        message: payment.memo || this.config.message,
-      })
+    const url = encodeURL(urlParams)
 
-      return {
-        url: url.toString(),
-        reference,
-      }
-    } else {
-      const url = encodeURL({
-        recipient: recipient as PublicKey,
-        amount,
-        reference,
-        label: payment.label || this.config.label,
-        message: payment.memo || this.config.message,
-      })
-
-      return {
-        url: url.toString(),
-        reference,
-      }
+    return {
+      url: url.toString(),
+      reference,
     }
   }
 
   /**
    * Create 402 response using x402-solana handler
    */
-  create402Response(paymentRequirements: any) {
-    return this.x402Handler.create402Response(paymentRequirements)
+  create402Response(paymentRequirements: X402PaymentRequirements) {
+    return this.x402Handler.create402Response(paymentRequirements as Parameters<typeof this.x402Handler.create402Response>[0])
   }
 
   /**
    * Extract payment from request headers
    */
-  extractPayment(headers: any) {
-    console.log('[Bridge] extractPayment called with headers:', {
-      'x-payment-proof': headers['x-payment-proof'],
-      'x-payment-reference': headers['x-payment-reference'],
-      allHeaders: Object.keys(headers),
-    })
+  extractPayment(headers: Record<string, string | string[] | undefined>): X402PaymentHeader | null {
     const result = this.x402Handler.extractPayment(headers)
-    console.log('[Bridge] extractPayment result:', result ? 'Found payment' : 'No payment found')
-    if (result) {
-      console.log('[Bridge] Payment details:', result)
+    if (!result) return null
+    if (typeof result === 'string') {
+      try {
+        return JSON.parse(result)
+      } catch {
+        return { signature: result }
+      }
     }
-    return result
+    return result as X402PaymentHeader
   }
 
   /**
    * Verify payment using x402 facilitator with fallback to on-chain
    */
   async verifyPayment(
-    paymentHeader: any,
-    paymentRequirements: any
+    paymentHeader: X402PaymentHeader | string,
+    paymentRequirements: X402PaymentRequirements
   ): Promise<PaymentVerification> {
-    try {
-      console.log('[Bridge] Starting payment verification via x402 facilitator...')
-      console.log('[Bridge] Facilitator URL:', this.config.facilitatorUrl || 'https://facilitator.payai.network')
-      console.log('[Bridge] Payment network:', this.config.network)
+    const payment: X402PaymentHeader = typeof paymentHeader === 'string'
+      ? JSON.parse(paymentHeader)
+      : paymentHeader
 
-      // Try x402 facilitator verification first
+    const signature = payment.signature
+
+    if (!signature) {
+      return {
+        valid: false,
+        signature: '',
+        error: 'No signature provided',
+      }
+    }
+
+    // Check for replay attack
+    const alreadyUsed = await this.signatureStore.has(signature)
+    if (alreadyUsed) {
+      return {
+        valid: false,
+        signature,
+        error: 'Payment signature already used',
+      }
+    }
+
+    try {
+      // Try x402 facilitator verification first (may fail due to gzip issues)
+      const headerStr = typeof paymentHeader === 'string' ? paymentHeader : JSON.stringify(paymentHeader)
       try {
-        const verified = await this.x402Handler.verifyPayment(paymentHeader, paymentRequirements)
+        const verified = await this.x402Handler.verifyPayment(headerStr, paymentRequirements as Parameters<typeof this.x402Handler.verifyPayment>[1])
 
         if (verified) {
-          console.log('[Bridge] ✓ Payment verified via x402 facilitator!')
-
-          // Parse signature from payment header
-          let payment = typeof paymentHeader === 'string' ? JSON.parse(paymentHeader) : paymentHeader
-
+          await this.signatureStore.add(signature)
           return {
             valid: true,
-            signature: payment.signature || '',
+            signature,
             amount: parseInt(paymentRequirements.maxAmountRequired),
           }
         }
-      } catch (facilitatorError) {
-        console.warn('[Bridge] Facilitator verification failed, falling back to on-chain verification')
-        console.warn('[Bridge] Facilitator error:', facilitatorError instanceof Error ? facilitatorError.message : facilitatorError)
+      } catch {
+        // Facilitator unavailable or gzip response issue, fall back to on-chain
       }
 
       // Fallback: Direct on-chain verification
-      console.log('[Bridge] Using fallback: direct on-chain verification...')
-
-      // Parse payment header
-      let payment = typeof paymentHeader === 'string' ? JSON.parse(paymentHeader) : paymentHeader
-      const signature = payment.signature
-
-      if (!signature) {
-        return {
-          valid: false,
-          signature: '',
-          error: 'No signature provided',
-        }
-      }
-
-      // Fetch and verify transaction on-chain
       const tx = await this.connection.getTransaction(signature, {
         maxSupportedTransactionVersion: 0
       })
@@ -228,7 +261,6 @@ export class SolanaPayX402Bridge {
         }
       }
 
-      // Verify amount
       const expectedAmount = parseInt(paymentRequirements.maxAmountRequired)
       const recipientPubkey = new PublicKey(paymentRequirements.payTo)
 
@@ -258,7 +290,7 @@ export class SolanaPayX402Bridge {
         }
       }
 
-      console.log('[Bridge] ✓ Payment verified on-chain (facilitator unavailable)!')
+      await this.signatureStore.add(signature)
 
       return {
         valid: true,
@@ -266,67 +298,38 @@ export class SolanaPayX402Bridge {
         amount: balanceChange,
       }
     } catch (error) {
-      console.error('[Bridge] Verification error:', error)
-      let sig = ''
-      try {
-        const payment = typeof paymentHeader === 'string' ? JSON.parse(paymentHeader) : paymentHeader
-        sig = payment?.signature || ''
-      } catch (e) {}
-
       return {
         valid: false,
-        signature: sig,
-        error: error instanceof Error ? error.message : 'Unknown verification error',
+        signature,
+        error: error instanceof Error ? error.message : 'Verification failed',
       }
     }
   }
 
   /**
    * Settle payment through facilitator
-   * Note: Settlement is optional - payment has already been verified
    */
-  async settlePayment(paymentHeader: any, paymentRequirements: any): Promise<string | null> {
+  async settlePayment(
+    paymentHeader: X402PaymentHeader | string,
+    paymentRequirements: X402PaymentRequirements
+  ): Promise<string | null> {
     if (!this.config.autoSettle) {
       return null
     }
 
     try {
-      console.log('[Bridge] Attempting settlement via facilitator...')
-
-      // Try using the x402 handler, but the facilitator might have gzip issues on devnet
-      const settlement = await this.x402Handler.settlePayment(paymentHeader, paymentRequirements)
-
-      if (settlement?.transaction) {
-        console.log('[Bridge] ✓ Settlement recorded:', settlement.transaction)
-        return settlement.transaction
-      }
-
-      return null
-    } catch (error) {
-      // Settlement failures are not critical - payment is already verified
-      const errorMsg = error instanceof Error ? error.message : String(error)
-
-      if (errorMsg.includes('not valid JSON') || errorMsg.includes('Unexpected token')) {
-        console.log('[Bridge] Settlement skipped: Facilitator response format issue (known devnet issue)')
-        console.log('[Bridge] Note: Payment verification succeeded - settlement is just for facilitator accounting')
-      } else {
-        console.warn('[Bridge] Settlement failed:', errorMsg)
-      }
-
+      const headerStr = typeof paymentHeader === 'string' ? paymentHeader : JSON.stringify(paymentHeader)
+      const settlement = await this.x402Handler.settlePayment(headerStr, paymentRequirements as Parameters<typeof this.x402Handler.settlePayment>[1])
+      return settlement?.transaction ?? null
+    } catch {
       return null
     }
   }
 
-  /**
-   * Get the Solana connection instance
-   */
   getConnection(): Connection {
     return this.connection
   }
 
-  /**
-   * Get the x402 handler instance for advanced usage
-   */
   getX402Handler(): X402PaymentHandler {
     return this.x402Handler
   }
