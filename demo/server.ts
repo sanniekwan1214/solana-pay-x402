@@ -9,7 +9,11 @@ const NETWORK = (process.env.SOLANA_NETWORK || 'mainnet-beta') as 'mainnet-beta'
 const RPC_URL = process.env.SOLANA_RPC_URL || (NETWORK === 'devnet'
   ? 'https://api.devnet.solana.com'
   : 'https://api.mainnet-beta.solana.com')
-const MERCHANT_WALLET = process.env.MERCHANT_WALLET || '9xXw5WutpPSvZjj4RjxvdaYoUTFLFWWQz4V2hiGJmhQu'
+const MERCHANT_WALLET = process.env.MERCHANT_WALLET || 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8'
+
+// USDC on Solana mainnet
+const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+const USDC_DECIMALS = 6
 
 function log(level: string, message: string, data?: Record<string, unknown>) {
   const timestamp = new Date().toISOString()
@@ -37,11 +41,12 @@ console.log(`│  Wallet:   ${MERCHANT_WALLET.slice(0, 8)}...${MERCHANT_WALLET.s
 console.log(`│  RPC:      ${RPC_URL.slice(0, 28).padEnd(28)}│`)
 console.log('└─────────────────────────────────────────┘\n')
 
+// Prices in USDC (6 decimals)
 const pricing: Record<string, number> = {
-  content: 0.0001 * 1e9,
-  basic: 0.0005 * 1e9,
-  premium: 0.001 * 1e9,
-  enterprise: 0.005 * 1e9,
+  content: 0.00001 * 1e6,      // $0.00001 USDC (10 units)
+  basic: 0.00005 * 1e6,        // $0.00005 USDC (50 units)
+  premium: 0.0001 * 1e6,       // $0.0001 USDC (100 units)
+  enterprise: 0.0005 * 1e6,    // $0.0005 USDC (500 units)
 }
 
 app.get('/api/content',
@@ -51,6 +56,7 @@ app.get('/api/content',
     network: NETWORK,
     label: 'Content Access',
     autoSettle: true,
+    splToken: { mint: USDC_MINT, decimals: USDC_DECIMALS },
     getPaymentAmount: () => pricing.content,
     onPaymentVerified: (req, verification) => {
       log('payment', 'verified', {
@@ -80,6 +86,7 @@ app.get('/api/data/:tier',
     network: NETWORK,
     label: 'Data API',
     autoSettle: true,
+    splToken: { mint: USDC_MINT, decimals: USDC_DECIMALS },
     getPaymentAmount: (req) => pricing[req.params.tier] || null,
     onPaymentVerified: (req, verification) => {
       log('payment', 'verified', {
@@ -113,9 +120,9 @@ app.get('/api/health', (_req: Request, res: Response) => {
 app.listen(PORT, () => {
   console.log(`Server: http://localhost:${PORT}`)
   console.log('\nEndpoints:')
-  console.log(`  GET /api/content      ${pricing.content / 1e9} SOL`)
-  console.log(`  GET /api/data/basic   ${pricing.basic / 1e9} SOL`)
-  console.log(`  GET /api/data/premium ${pricing.premium / 1e9} SOL`)
-  console.log(`  GET /api/data/enterprise ${pricing.enterprise / 1e9} SOL`)
-  console.log(`  GET /api/health       free\n`)
+  console.log(`  GET /api/content         $${(pricing.content / 1e6).toFixed(5)} USDC`)
+  console.log(`  GET /api/data/basic      $${(pricing.basic / 1e6).toFixed(5)} USDC`)
+  console.log(`  GET /api/data/premium    $${(pricing.premium / 1e6).toFixed(4)} USDC`)
+  console.log(`  GET /api/data/enterprise $${(pricing.enterprise / 1e6).toFixed(4)} USDC`)
+  console.log(`  GET /api/health          free\n`)
 })

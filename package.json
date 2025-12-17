@@ -22,8 +22,7 @@
     "test": "vitest",
     "lint": "eslint src/**/*.ts",
     "prepublishOnly": "npm run build",
-    "demo": "tsx demo/server.ts",
-    "demo:js": "node demo/server.js"
+    "demo": "tsx demo/server.ts"
   },
   "keywords": [
     "solana",

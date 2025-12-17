@@ -142,21 +142,21 @@
     <div class="section">
       <div class="section-title">Endpoints</div>
       <div class="endpoints">
-        <div class="endpoint" onclick="select('/api/content', 0.0001)">
+        <div class="endpoint" onclick="select('/api/content', 0.00001)">
           <span class="endpoint-path">GET /api/content</span>
-          <span class="endpoint-price">0.0001 SOL</span>
+          <span class="endpoint-price">$0.00001 USDC</span>
         </div>
-        <div class="endpoint" onclick="select('/api/data/basic', 0.0005)">
+        <div class="endpoint" onclick="select('/api/data/basic', 0.00005)">
           <span class="endpoint-path">GET /api/data/basic</span>
-          <span class="endpoint-price">0.0005 SOL</span>
+          <span class="endpoint-price">$0.00005 USDC</span>
         </div>
-        <div class="endpoint" onclick="select('/api/data/premium', 0.001)">
+        <div class="endpoint" onclick="select('/api/data/premium', 0.0001)">
           <span class="endpoint-path">GET /api/data/premium</span>
-          <span class="endpoint-price">0.001 SOL</span>
+          <span class="endpoint-price">$0.0001 USDC</span>
         </div>
-        <div class="endpoint" onclick="select('/api/data/enterprise', 0.005)">
+        <div class="endpoint" onclick="select('/api/data/enterprise', 0.0005)">
           <span class="endpoint-path">GET /api/data/enterprise</span>
-          <span class="endpoint-price">0.005 SOL</span>
+          <span class="endpoint-price">$0.0005 USDC</span>
         </div>
       </div>
     </div>
@@ -218,7 +218,7 @@
       $('reqBtn').textContent = `Request ${path}`
       $('payPanel').classList.remove('active')
       $('result').classList.remove('active', 'success', 'error')
-      log('info', `Selected: ${path} (${price} SOL)`)
+      log('info', `Selected: ${path} ($${price} USDC)`)
     }
 
     async function request() {
@@ -263,9 +263,13 @@
       log('info', `Verifying: ${sig.slice(0,16)}...`)
 
       try {
+        // x402-solana expects base64-encoded JSON payment header
+        const paymentPayload = { signature: sig, scheme: 'exact' }
+        const paymentHeader = btoa(JSON.stringify(paymentPayload))
+
         const r = await fetch(ep.path, {
           headers: {
-            'X-Payment': JSON.stringify({ signature: sig, scheme: 'exact' })
+            'X-Payment': paymentHeader
           }
         })
         const d = await r.json()

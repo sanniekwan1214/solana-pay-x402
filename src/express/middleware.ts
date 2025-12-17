@@ -5,7 +5,6 @@ import type {
   PaymentRequest,
   PaymentVerification,
   X402PaymentRequirements,
-  X402PaymentHeader,
 } from '../types'
 
 export interface ExpressMiddlewareOptions extends SolanaPayX402Config {
@@ -115,7 +114,7 @@ async function handlePaymentVerification(
   req: Request,
   res: Response,
   next: NextFunction,
-  paymentHeader: X402PaymentHeader
+  paymentHeader: string
 ) {
   const expectedAmount = await options.getPaymentAmount(req)
 

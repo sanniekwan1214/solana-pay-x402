@@ -9,9 +9,12 @@ import type {
   PaymentVerification,
   SignatureStore,
   X402PaymentRequirements,
-  X402PaymentHeader,
 } from '../types'
 import { InMemorySignatureStore } from '../types'
+
+import { debugLog, setupFetchInterceptor } from '../utils/debug'
+
+setupFetchInterceptor()
 
 const SOL_DECIMALS = 9
 const SOL_MINT = 'So11111111111111111111111111111111111111112'
@@ -185,32 +188,32 @@ export class SolanaPayX402Bridge {
 
   /**
    * Extract payment from request headers
+   * Returns raw base64 string as expected by x402-solana
    */
-  extractPayment(headers: Record<string, string | string[] | undefined>): X402PaymentHeader | null {
-    const result = this.x402Handler.extractPayment(headers)
-    if (!result) return null
-    if (typeof result === 'string') {
-      try {
-        return JSON.parse(result)
-      } catch {
-        return { signature: result }
-      }
-    }
-    return result as X402PaymentHeader
+  extractPayment(headers: Record<string, string | string[] | undefined>): string | null {
+    return this.x402Handler.extractPayment(headers)
   }
 
   /**
    * Verify payment using x402 facilitator with fallback to on-chain
+   * paymentHeader should be raw base64 string from extractPayment
    */
   async verifyPayment(
-    paymentHeader: X402PaymentHeader | string,
+    paymentHeader: string,
     paymentRequirements: X402PaymentRequirements
   ): Promise<PaymentVerification> {
-    const payment: X402PaymentHeader = typeof paymentHeader === 'string'
-      ? JSON.parse(paymentHeader)
-      : paymentHeader
-
-    const signature = payment.signature
+    // Decode base64 to get signature
+    let signature: string
+    try {
+      const decoded = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'))
+      signature = decoded.signature
+    } catch {
+      return {
+        valid: false,
+        signature: '',
+        error: 'Invalid payment header format',
+      }
+    }
 
     if (!signature) {
       return {
@@ -231,12 +234,28 @@ export class SolanaPayX402Bridge {
     }
 
     try {
-      // Try x402 facilitator verification first (may fail due to gzip issues)
-      const headerStr = typeof paymentHeader === 'string' ? paymentHeader : JSON.stringify(paymentHeader)
+      // Try x402 facilitator verification first
       try {
-        const verified = await this.x402Handler.verifyPayment(headerStr, paymentRequirements as Parameters<typeof this.x402Handler.verifyPayment>[1])
+        debugLog('verify', 'Initiating facilitator verification', {
+          signature,
+          paymentHeaderBase64: paymentHeader,
+          paymentRequirements: {
+            scheme: paymentRequirements.scheme,
+            network: paymentRequirements.network,
+            maxAmountRequired: paymentRequirements.maxAmountRequired,
+            resource: paymentRequirements.resource,
+            payTo: paymentRequirements.payTo,
+          },
+        })
 
-        if (verified) {
+        const verified = await this.x402Handler.verifyPayment(paymentHeader, paymentRequirements as Parameters<typeof this.x402Handler.verifyPayment>[1])
+
+        debugLog('verify', 'Facilitator response received', {
+          result: verified as Record<string, unknown>,
+        })
+
+        if (verified && (verified as { isValid?: boolean }).isValid) {
+          debugLog('verify', 'Facilitator verification SUCCESS')
           await this.signatureStore.add(signature)
           return {
             valid: true,
@@ -244,16 +263,27 @@ export class SolanaPayX402Bridge {
             amount: parseInt(paymentRequirements.maxAmountRequired),
           }
         }
-      } catch {
-        // Facilitator unavailable or gzip response issue, fall back to on-chain
+        debugLog('verify', 'Facilitator returned invalid, falling back to on-chain')
+      } catch (err) {
+        debugLog('verify', 'Facilitator verification failed', {
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        })
+        debugLog('verify', 'Falling back to on-chain verification')
       }
 
       // Fallback: Direct on-chain verification
+      debugLog('onchain', 'Fetching transaction from RPC', { signature })
+
       const tx = await this.connection.getTransaction(signature, {
         maxSupportedTransactionVersion: 0
       })
 
       if (!tx || tx.meta?.err) {
+        debugLog('onchain', 'Transaction not found or failed', {
+          found: !!tx,
+          error: tx?.meta?.err,
+        })
         return {
           valid: false,
           signature,
@@ -261,28 +291,82 @@ export class SolanaPayX402Bridge {
         }
       }
 
+      debugLog('onchain', 'Transaction found', {
+        slot: tx.slot,
+        blockTime: tx.blockTime,
+      })
+
       const expectedAmount = parseInt(paymentRequirements.maxAmountRequired)
       const recipientPubkey = new PublicKey(paymentRequirements.payTo)
+      const tokenMint = this.config.splToken?.mint.toString()
 
-      const accountKeys = 'accountKeys' in tx.transaction.message
-        ? tx.transaction.message.accountKeys
-        : tx.transaction.message.getAccountKeys().keySegments().flat()
-
-      const recipientIndex = accountKeys.findIndex(
-        (key: PublicKey) => key.toString() === recipientPubkey.toString()
-      )
-
-      if (recipientIndex === -1 || !tx.meta) {
+      if (!tx.meta) {
         return {
           valid: false,
           signature,
-          error: 'Recipient not found in transaction',
+          error: 'Transaction metadata not available',
         }
       }
 
-      const balanceChange = tx.meta.postBalances[recipientIndex] - tx.meta.preBalances[recipientIndex]
+      let balanceChange: number
+
+      if (tokenMint && tokenMint !== SOL_MINT) {
+        // SPL Token verification - check token balances
+        debugLog('onchain', 'Verifying SPL token transfer', { mint: tokenMint })
+
+        const preTokenBalances = tx.meta.preTokenBalances || []
+        const postTokenBalances = tx.meta.postTokenBalances || []
+
+        // Find recipient's token balance change
+        const recipientPostBalance = postTokenBalances.find(
+          (b) => b.mint === tokenMint && b.owner === recipientPubkey.toString()
+        )
+        const recipientPreBalance = preTokenBalances.find(
+          (b) => b.mint === tokenMint && b.owner === recipientPubkey.toString()
+        )
+
+        const postAmount = recipientPostBalance?.uiTokenAmount?.amount
+          ? parseInt(recipientPostBalance.uiTokenAmount.amount)
+          : 0
+        const preAmount = recipientPreBalance?.uiTokenAmount?.amount
+          ? parseInt(recipientPreBalance.uiTokenAmount.amount)
+          : 0
+
+        balanceChange = postAmount - preAmount
+
+        debugLog('onchain', 'SPL token balance change', {
+          recipient: recipientPubkey.toString(),
+          mint: tokenMint,
+          preAmount,
+          postAmount,
+          change: balanceChange,
+        })
+      } else {
+        // Native SOL verification
+        const accountKeys = 'accountKeys' in tx.transaction.message
+          ? tx.transaction.message.accountKeys
+          : tx.transaction.message.getAccountKeys().keySegments().flat()
+
+        const recipientIndex = accountKeys.findIndex(
+          (key: PublicKey) => key.toString() === recipientPubkey.toString()
+        )
+
+        if (recipientIndex === -1) {
+          return {
+            valid: false,
+            signature,
+            error: 'Recipient not found in transaction',
+          }
+        }
+
+        balanceChange = tx.meta.postBalances[recipientIndex] - tx.meta.preBalances[recipientIndex]
+      }
 
       if (balanceChange < expectedAmount) {
+        debugLog('onchain', 'Insufficient payment amount', {
+          expected: expectedAmount,
+          received: balanceChange,
+        })
         return {
           valid: false,
           signature,
@@ -291,6 +375,12 @@ export class SolanaPayX402Bridge {
       }
 
       await this.signatureStore.add(signature)
+
+      debugLog('onchain', 'On-chain verification SUCCESS', {
+        signature,
+        amount: balanceChange,
+        recipient: recipientPubkey.toString(),
+      })
 
       return {
         valid: true,
@@ -310,18 +400,37 @@ export class SolanaPayX402Bridge {
    * Settle payment through facilitator
    */
   async settlePayment(
-    paymentHeader: X402PaymentHeader | string,
+    paymentHeader: string,
     paymentRequirements: X402PaymentRequirements
   ): Promise<string | null> {
     if (!this.config.autoSettle) {
+      debugLog('settle', 'Auto-settle disabled, skipping')
       return null
     }
 
     try {
-      const headerStr = typeof paymentHeader === 'string' ? paymentHeader : JSON.stringify(paymentHeader)
-      const settlement = await this.x402Handler.settlePayment(headerStr, paymentRequirements as Parameters<typeof this.x402Handler.settlePayment>[1])
+      debugLog('settle', 'Initiating facilitator settlement', {
+        paymentHeaderBase64: paymentHeader,
+        paymentRequirements: {
+          scheme: paymentRequirements.scheme,
+          network: paymentRequirements.network,
+          maxAmountRequired: paymentRequirements.maxAmountRequired,
+          payTo: paymentRequirements.payTo,
+        },
+      })
+
+      const settlement = await this.x402Handler.settlePayment(paymentHeader, paymentRequirements as Parameters<typeof this.x402Handler.settlePayment>[1])
+
+      debugLog('settle', 'Facilitator settlement response', {
+        result: settlement as Record<string, unknown>,
+      })
+
       return settlement?.transaction ?? null
-    } catch {
+    } catch (err) {
+      debugLog('settle', 'Facilitator settlement failed', {
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      })
       return null
     }
   }
