@@ -260,6 +260,14 @@ SOLANA_NETWORK=devnet
 PORT=3000
 ```
 
+## Disclaimer
+
+This software is provided as-is, without warranty. It has not been independently audited. Use at your own risk, especially on mainnet with real funds.
+
+This package relies on the PayAI Network facilitator for x402 v2 payment verification and settlement. The authors are not responsible for facilitator downtime, failed transactions, or lost funds.
+
+Always test on devnet before deploying to mainnet. The authors are not liable for any financial losses resulting from the use of this software. See LICENSE for full terms.
+
 ## License
 
 Apache-2.0
