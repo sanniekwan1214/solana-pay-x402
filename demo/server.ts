@@ -113,6 +113,21 @@ app.get('/api/data/:tier',
   }
 )
 
+// RPC proxy — browser can't call public Solana RPC directly (CORS blocked)
+app.post('/rpc', async (req: Request, res: Response) => {
+  try {
+    const rpcRes = await fetch(RPC_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    })
+    const data = await rpcRes.json()
+    res.json(data)
+  } catch (err) {
+    res.status(502).json({ error: 'RPC proxy error', message: (err as Error).message })
+  }
+})
+
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', network: NETWORK, wallet: MERCHANT_WALLET, pricing })
 })

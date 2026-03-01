@@ -6,21 +6,19 @@ vi.mock('x402-solana/server', () => ({
   X402PaymentHandler: vi.fn().mockImplementation(() => ({
     createPaymentRequirements: vi.fn().mockResolvedValue({
       scheme: 'exact',
-      network: 'solana',
-      maxAmountRequired: '100000',
-      resource: 'http://localhost:3000/api/test',
-      description: 'Test Payment',
+      network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+      amount: '100000',
       payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
       maxTimeoutSeconds: 300,
       asset: 'So11111111111111111111111111111111111111112',
+      extra: {},
     }),
     create402Response: vi.fn().mockReturnValue({
       status: 402,
-      body: { paymentRequired: true },
-      headers: { 'X-Payment-Required': 'true' },
+      body: { x402Version: 2, accepts: [], resource: {} },
     }),
     extractPayment: vi.fn().mockImplementation((headers) => {
-      return headers['x-payment'] || null
+      return headers['payment-signature'] || headers['PAYMENT-SIGNATURE'] || null
     }),
     verifyPayment: vi.fn().mockResolvedValue({ isValid: true }),
     settlePayment: vi.fn().mockResolvedValue({ success: true, transaction: 'tx-sig' }),
@@ -103,13 +101,24 @@ describe('solanaPay402 middleware', () => {
   })
 
   describe('payment verification flow', () => {
-    it('verifies payment and calls next on success', async () => {
-      const paymentHeader = Buffer.from(JSON.stringify({
-        signature: 'valid-sig',
+    // v2 x402 payload format — routes through mocked facilitator
+    const makeV2PaymentHeader = () => Buffer.from(JSON.stringify({
+      x402Version: 2,
+      resource: { url: 'http://localhost:3000/api/test' },
+      accepted: {
         scheme: 'exact',
-      })).toString('base64')
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        amount: '100000',
+        payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
+        maxTimeoutSeconds: 300,
+        asset: 'So11111111111111111111111111111111111111112',
+        extra: {},
+      },
+      payload: { transaction: 'base64-signed-tx' },
+    })).toString('base64')
 
-      mockReq.headers = { 'x-payment': paymentHeader }
+    it('verifies payment and calls next on success', async () => {
+      mockReq.headers = { 'payment-signature': makeV2PaymentHeader() }
 
       const middleware = solanaPay402(baseOptions)
       await middleware(mockReq as Request, mockRes as Response, mockNext)
@@ -118,12 +127,7 @@ describe('solanaPay402 middleware', () => {
     })
 
     it('attaches payment info to request on success', async () => {
-      const paymentHeader = Buffer.from(JSON.stringify({
-        signature: 'valid-sig',
-        scheme: 'exact',
-      })).toString('base64')
-
-      mockReq.headers = { 'x-payment': paymentHeader }
+      mockReq.headers = { 'payment-signature': makeV2PaymentHeader() }
 
       const middleware = solanaPay402(baseOptions)
       await middleware(mockReq as Request, mockRes as Response, mockNext)
@@ -137,11 +141,21 @@ describe('solanaPay402 middleware', () => {
     it('calls onPaymentVerified callback on success', async () => {
       const onPaymentVerified = vi.fn()
       const paymentHeader = Buffer.from(JSON.stringify({
-        signature: 'valid-sig',
-        scheme: 'exact',
+        x402Version: 2,
+        resource: { url: 'http://localhost:3000/api/test' },
+        accepted: {
+          scheme: 'exact',
+          network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+          amount: '100000',
+          payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
+          maxTimeoutSeconds: 300,
+          asset: 'So11111111111111111111111111111111111111112',
+          extra: {},
+        },
+        payload: { transaction: 'base64-signed-tx' },
       })).toString('base64')
 
-      mockReq.headers = { 'x-payment': paymentHeader }
+      mockReq.headers = { 'payment-signature': paymentHeader }
 
       const middleware = solanaPay402({
         ...baseOptions,

@@ -1,10 +1,10 @@
 import type { Request, Response, NextFunction } from 'express'
 import { SolanaPayX402Bridge } from '../core/bridge'
+import type { PaymentRequirements } from 'x402-solana/types'
 import type {
   SolanaPayX402Config,
   PaymentRequest,
   PaymentVerification,
-  X402PaymentRequirements,
 } from '../types'
 
 export interface ExpressMiddlewareOptions extends SolanaPayX402Config {
@@ -97,7 +97,7 @@ async function sendPaymentChallenge(
     resource
   )
 
-  const response402 = bridge.create402Response(paymentRequirements)
+  const response402 = bridge.create402Response(paymentRequirements, resource)
 
   res.status(402).json({
     ...response402.body,
@@ -136,19 +136,13 @@ async function handlePaymentVerification(
     ? (typeof options.splToken.mint === 'string' ? options.splToken.mint : options.splToken.mint.toString())
     : 'So11111111111111111111111111111111111111112'
 
-  const priceConfig = {
+  const routeConfig = {
     amount,
     asset: { address: tokenAddress, decimals },
+    description: options.label || 'Payment',
   }
 
-  const paymentRequirements = await bridge.getX402Handler().createPaymentRequirements({
-    price: priceConfig,
-    network: options.network === 'devnet' ? 'solana-devnet' : 'solana',
-    config: {
-      description: options.label || 'Payment',
-      resource: resource as `${string}://${string}`,
-    },
-  }) as X402PaymentRequirements
+  const paymentRequirements = await bridge.getX402Handler().createPaymentRequirements(routeConfig, resource) as PaymentRequirements
 
   const verification = await bridge.verifyPayment(paymentHeader, paymentRequirements)
 

@@ -1,33 +1,17 @@
 # Solana Pay x402
 
-Express middleware for integrating **Solana Pay** with the **x402 HTTP payment protocol**. This package combines Solana Pay's familiar QR code/URL flow with x402's HTTP-native payment verification and settlement.
+Express middleware that puts any API endpoint behind a Solana payment. Drop it into a route and your endpoint returns `402 Payment Required` until the client pays.
 
-## What is this?
+Two payment flows, one middleware — the server figures out which one the client is using:
 
-This package bridges two payment standards:
+- **x402 v2**: Client signs a transaction, facilitator submits it and pays gas. Good for dApps, APIs, and anything programmatic.
+- **Solana Pay**: Client scans a QR code with a mobile wallet, pays on-chain directly. Good for mobile, retail, POS.
 
-- **Solana Pay**: Protocol for Solana blockchain payments with QR codes and deep wallet links
-- **x402**: HTTP-native payment protocol using status code 402 for payment-gated resources
-
-The result: Accept Solana payments in your Express API using standard HTTP 402 responses, verified through the PayAI Network facilitator.
-
-## Features
-
-- Simple Express middleware - One-line integration for payment-gated routes
-- Solana Pay compatible - Works with Phantom, Solflare, and other Solana wallets
-- True x402 protocol - Uses x402-solana package with facilitator verification
-- Dynamic pricing - Set prices per-request based on any logic
-- Auto-settlement - Optional automatic payment settlement via facilitator
-- TypeScript-first - Full type safety throughout
-- Flexible - Supports both SOL and SPL tokens (USDC, USDT, etc.)
-
-## Installation
+## Quick Start
 
 ```bash
 npm install solana-pay-x402
 ```
-
-## Quick Start
 
 ```typescript
 import express from 'express'
@@ -43,104 +27,105 @@ app.get('/api/premium',
     getPaymentAmount: () => 0.01 * 1e9, // 0.01 SOL in lamports
   }),
   (req, res) => {
-    res.json({ content: 'Premium content!' })
+    res.json({ content: 'You paid for this.' })
   }
 )
 
 app.listen(3000)
 ```
 
+That's it. The middleware handles the 402 response, payment verification, and settlement.
+
 ## How It Works
 
-### The Payment Flow
+### x402 v2 Flow (Programmatic)
 
-1. **Client requests resource** - `GET /api/premium`
-2. **Server responds with 402** - Returns Solana Pay URL + x402 payment requirements
-3. **Client pays with wallet** - User scans QR or clicks URL, approves in Phantom/Solflare
-4. **Client retries with proof** - Sends request with payment proof in headers
-5. **Server verifies via facilitator** - Payment verified through PayAI Network
-6. **Server delivers content** - Request proceeds to your route handler
+```
+Client                    Server                   Facilitator
+  |-- GET /api/premium ----->|                          |
+  |<---- 402 + requirements -|                          |
+  |                          |                          |
+  | (build tx, sign with wallet, don't submit)          |
+  |                          |                          |
+  |-- GET /api/premium ----->|                          |
+  |   + PAYMENT-SIGNATURE    |-- verify + settle ------>|
+  |                          |<---- ok, tx submitted ---|
+  |<---- 200 + content ------|                          |
+```
 
-### Example 402 Response
+The client signs a transaction but never submits it. The facilitator submits it, verifies payment, and covers gas fees. This is the x402 protocol — the client just uses `createX402Client` from `x402-solana/client` and it handles everything behind a `fetch()` call.
+
+### Solana Pay Flow (QR Code)
+
+```
+Client                    Server                   Solana
+  |-- GET /api/premium ----->|                        |
+  |<---- 402 + QR URL ------|                        |
+  |                          |                        |
+  | (scan QR, wallet submits tx on-chain)             |
+  |                          |                   tx on-chain
+  |-- GET /api/premium ----->|                        |
+  |   + PAYMENT-SIGNATURE    |-- getTransaction ----->|
+  |     (tx signature)       |<---- tx details -------|
+  |<---- 200 + content ------|                        |
+```
+
+The client scans a QR code, their wallet submits the transaction directly on-chain, and the client sends the transaction signature back. The server verifies on-chain.
+
+### 402 Response
+
+When a request hits a gated endpoint without payment, the response includes both payment options:
 
 ```json
 {
-  "error": "Payment Required",
-  "message": "Please complete payment to access this resource",
+  "x402Version": 2,
+  "accepts": [{
+    "scheme": "exact",
+    "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+    "amount": "10",
+    "payTo": "YOUR_WALLET",
+    "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "extra": { "feePayer": "..." }
+  }],
   "solanaPay": {
-    "url": "solana:RECIPIENT?amount=0.01&label=Payment",
+    "url": "solana:YOUR_WALLET?amount=0.00001&spl-token=EPjFW...",
     "reference": "Bx7j8K..."
-  },
-  "x402": {
-    "version": 1,
-    "price": {
-      "amount": "10000000",
-      "asset": {
-        "address": "So11111111111111111111111111111111111111112",
-        "decimals": 9
-      }
-    }
-  },
-  "instructions": {
-    "step1": "Open Solana wallet (Phantom, Solflare, etc.)",
-    "step2": "Scan QR code or use URL: solana:...",
-    "step3": "Approve the payment in your wallet",
-    "step4": "Retry request with payment proof in headers"
   }
 }
 ```
 
+x402 clients read the `accepts` array. Solana Pay clients use the `solanaPay.url` for QR codes. The middleware auto-detects which flow the client used when they come back with the `PAYMENT-SIGNATURE` header.
+
 ## Configuration
 
-### Basic Options
-
 ```typescript
-interface SolanaPayX402Config {
-  /** Solana RPC endpoint */
-  rpcUrl: string
+solanaPay402({
+  // Required
+  rpcUrl: 'https://api.devnet.solana.com',
+  recipient: 'YOUR_WALLET_ADDRESS',
+  getPaymentAmount: (req) => 1000000,  // return null to skip payment
 
-  /** Your wallet address (receives payments) */
-  recipient: string
+  // Optional
+  network: 'devnet',                    // default: 'mainnet-beta'
+  label: 'My API',                      // shown in wallet
+  message: 'Thanks for paying',         // memo field
+  autoSettle: true,                     // default: true
+  facilitatorUrl: 'https://...',        // default: PayAI Network
 
-  /** x402 facilitator URL (default: PayAI Network) */
-  facilitatorUrl?: string
+  // SPL token (defaults to native SOL)
+  splToken: {
+    mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+    decimals: 6,
+  },
 
-  /** Network: 'mainnet-beta' | 'devnet' | 'testnet' */
-  network?: string
-
-  /** Payment label (shown in wallet) */
-  label?: string
-
-  /** Payment message/memo */
-  message?: string
-
-  /** SPL token mint (optional, defaults to SOL) */
-  splToken?: string
-
-  /** Enable automatic settlement (default: true) */
-  autoSettle?: boolean
-}
-```
-
-### Middleware Options
-
-```typescript
-interface ExpressMiddlewareOptions extends SolanaPayX402Config {
-  /** Determine payment amount for each request */
-  getPaymentAmount: (req: Request) => number | null
-
-  /** Optional: Add custom metadata */
-  getPaymentMetadata?: (req: Request) => Record<string, unknown>
-
-  /** Optional: Generate custom payment reference */
-  getReference?: (req: Request) => string
-
-  /** Optional: Called when payment verified */
-  onPaymentVerified?: (req: Request, verification: any) => void
-
-  /** Optional: Called when payment fails */
-  onPaymentFailed?: (req: Request, error: string) => void
-}
+  // Callbacks
+  onPaymentVerified: (req, verification) => {
+    console.log('Paid:', verification.signature, verification.amount)
+  },
+  onPaymentFailed: (req, error) => {
+    console.error('Failed:', error)
+  },
+})
 ```
 
 ## Examples
@@ -148,19 +133,13 @@ interface ExpressMiddlewareOptions extends SolanaPayX402Config {
 ### Dynamic Pricing
 
 ```typescript
+const pricing = { small: 1000000, medium: 5000000, large: 10000000 }
+
 app.get('/api/data/:size',
   solanaPay402({
     rpcUrl: process.env.SOLANA_RPC_URL,
     recipient: process.env.MERCHANT_WALLET,
-    network: 'devnet',
-
-    getPaymentAmount: (req) => {
-      const { size } = req.params
-      if (size === 'small') return 0.001 * 1e9
-      if (size === 'medium') return 0.005 * 1e9
-      if (size === 'large') return 0.01 * 1e9
-      return null // Free for unknown sizes
-    },
+    getPaymentAmount: (req) => pricing[req.params.size] || null,
   }),
   (req, res) => {
     res.json({ data: `Content for ${req.params.size}` })
@@ -168,148 +147,118 @@ app.get('/api/data/:size',
 )
 ```
 
-### Payment Tracking
+### USDC Payments
 
 ```typescript
 app.get('/api/premium',
   solanaPay402({
     rpcUrl: process.env.SOLANA_RPC_URL,
     recipient: process.env.MERCHANT_WALLET,
-    network: 'devnet',
-    getPaymentAmount: () => 0.01 * 1e9,
-
-    onPaymentVerified: (req, verification) => {
-      console.log('Payment received:', {
-        signature: verification.signature,
-        amount: verification.amount,
-        settlement: verification.settlementSignature,
-      })
+    splToken: {
+      mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      decimals: 6,
     },
-
-    onPaymentFailed: (req, error) => {
-      console.error('Payment failed:', error)
-    },
+    getPaymentAmount: () => 100, // $0.0001 USDC
   }),
+  (req, res) => {
+    res.json({ content: 'Paid with USDC' })
+  }
+)
+```
+
+### Reading Payment Info After Verification
+
+```typescript
+import { getPaymentInfo } from 'solana-pay-x402/express'
+
+app.get('/api/premium',
+  solanaPay402({ /* config */ }),
   (req, res) => {
     const payment = getPaymentInfo(req)
     res.json({
-      content: 'Premium content',
-      payment,
+      content: 'Premium stuff',
+      paidAmount: payment?.amount,
+      txSignature: payment?.signature,
     })
   }
 )
 ```
 
-### SPL Token Payments (USDC)
+## Client-Side: x402 v2
 
-```typescript
-app.get('/api/premium',
-  solanaPay402({
-    rpcUrl: process.env.SOLANA_RPC_URL,
-    recipient: process.env.MERCHANT_WALLET,
-    network: 'devnet',
-
-    // USDC devnet mint
-    splToken: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
-
-    // 1 USDC (6 decimals)
-    getPaymentAmount: () => 1 * 1e6,
-  }),
-  (req, res) => {
-    res.json({ content: 'Paid with USDC!' })
-  }
-)
-```
-
-## Client-Side Integration
-
-Clients can use the x402-solana client package for automatic payment handling:
+Use `x402-solana/client` for automatic payment handling. It wraps `fetch()` — if the server returns 402, it builds a transaction, asks the wallet to sign, and retries with the payment header. One line:
 
 ```typescript
 import { createX402Client } from 'x402-solana/client'
-import { useWallet } from '@solana/wallet-adapter-react'
 
-function MyComponent() {
-  const wallet = useWallet()
+const client = createX402Client({
+  wallet: phantomWallet, // any Solana wallet adapter
+  network: 'solana-devnet',
+})
 
-  const client = createX402Client({
-    wallet: {
-      address: wallet.publicKey.toString(),
-      signTransaction: async (tx) => await wallet.signTransaction(tx),
-    },
-    network: 'solana-devnet',
-  })
-
-  const response = await client.fetch('/api/premium')
-  const data = await response.json()
-}
+// This handles 402 → sign → retry automatically
+const response = await client.fetch('http://localhost:3000/api/premium')
+const data = await response.json()
 ```
+
+## Client-Side: Solana Pay
+
+For QR-based payments, the 402 response includes a `solanaPay.url` that you display as a QR code. After the user pays with their mobile wallet, send the transaction signature back:
+
+```javascript
+// 1. Request endpoint, get 402
+const res = await fetch('/api/premium')
+const { solanaPay } = await res.json()
+
+// 2. Show QR code with solanaPay.url
+displayQR(solanaPay.url)
+
+// 3. After user pays and you have the tx signature
+const proof = btoa(JSON.stringify({ signature: txSig, scheme: 'exact' }))
+const content = await fetch('/api/premium', {
+  headers: { 'PAYMENT-SIGNATURE': proof }
+})
+```
+
+## Demo
+
+The repo includes a working demo with both flows:
+
+```bash
+cd demo
+SOLANA_NETWORK=devnet npx tsx server.ts
+```
+
+Open `http://localhost:3000` — pick an endpoint, try x402 with Phantom browser extension or Solana Pay with the QR code.
+
+## How This Compares to x402-solana
+
+| | solana-pay-x402 | x402-solana |
+|---|---|---|
+| What it is | Express middleware | Protocol implementation |
+| Solana Pay QR | Built-in | Not included |
+| x402 v2 | Built-in | Built-in |
+| Setup | One-line middleware | Wire it up yourself |
+| Best for | Ship fast on Express | Custom setups, other frameworks |
+
+This package uses `x402-solana` under the hood. If you're on Express and want both payment flows without the plumbing, this is the shortcut.
 
 ## Development
 
 ```bash
-# Install dependencies
 npm install
-
-# Build
 npm run build
-
-# Run tests
 npm test
-
-# Development mode
-npm run dev
 ```
 
 ## Environment Variables
 
-Create a `.env` file:
-
 ```env
 SOLANA_RPC_URL=https://api.devnet.solana.com
 MERCHANT_WALLET=YOUR_WALLET_ADDRESS
+SOLANA_NETWORK=devnet
 PORT=3000
 ```
-
-## Use Cases
-
-- API Metering - Charge per API call or by data volume
-- Premium Features - Gate advanced features behind micropayments
-- Content Access - Pay-per-view for digital content
-- AI/ML APIs - Monetize compute-intensive endpoints
-- Data Downloads - Charge for exported data or reports
-
-## How This Differs from x402-solana
-
-| Feature | solana-pay-x402 | x402-solana |
-|---------|----------------|-------------|
-| Purpose | Express middleware + Solana Pay UX | Framework-agnostic x402 implementation |
-| Solana Pay URLs | Built-in QR code generation | Manual implementation needed |
-| Express integration | One-line middleware | Manual setup required |
-| Facilitator | PayAI Network (configurable) | Any facilitator |
-| Best for | Quick Express API setup | Custom implementations |
-
-## x402 Facilitator
-
-This package uses the PayAI Network facilitator by default. The facilitator:
-- Verifies payment signatures
-- Handles on-chain settlement
-- Provides payment guarantees
-- Currently covers all transaction fees (on devnet)
-
-You can use a custom facilitator by setting the `facilitatorUrl` option.
-
-## Roadmap
-
-- Support for Fastify framework
-- QR code image generation
-- Payment session caching with Redis
-- Webhook notifications
-- Admin dashboard for payment tracking
-
-## Contributing
-
-Contributions welcome! Please open an issue or PR.
 
 ## License
 
@@ -317,11 +266,7 @@ Apache-2.0
 
 ## Links
 
-- [Solana Pay Docs](https://docs.solanapay.com/)
 - [x402 Protocol](https://www.x402.org/)
-- [x402-solana Package](https://www.npmjs.com/package/x402-solana)
-- [PayAI Network Facilitator](https://facilitator.payai.network)
-
----
-
-Built for the Solana ecosystem
+- [Solana Pay](https://docs.solanapay.com/)
+- [x402-solana](https://www.npmjs.com/package/x402-solana)
+- [PayAI Network](https://facilitator.payai.network)

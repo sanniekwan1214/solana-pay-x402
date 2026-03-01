@@ -6,21 +6,19 @@ vi.mock('x402-solana/server', () => ({
   X402PaymentHandler: vi.fn().mockImplementation(() => ({
     createPaymentRequirements: vi.fn().mockResolvedValue({
       scheme: 'exact',
-      network: 'solana',
-      maxAmountRequired: '100000',
-      resource: 'http://localhost:3000/api/test',
-      description: 'Test Payment',
+      network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+      amount: '100000',
       payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
       maxTimeoutSeconds: 300,
       asset: 'So11111111111111111111111111111111111111112',
+      extra: {},
     }),
     create402Response: vi.fn().mockReturnValue({
       status: 402,
-      body: { paymentRequired: true },
-      headers: { 'X-Payment-Required': 'true' },
+      body: { x402Version: 2, accepts: [], resource: {} },
     }),
     extractPayment: vi.fn().mockImplementation((headers) => {
-      return headers['x-payment'] || null
+      return headers['payment-signature'] || headers['PAYMENT-SIGNATURE'] || null
     }),
     verifyPayment: vi.fn().mockResolvedValue({ isValid: false, invalidReason: 'unexpected_verify_error' }),
     settlePayment: vi.fn().mockResolvedValue({ success: false, errorReason: 'unexpected_settle_error' }),
@@ -195,7 +193,7 @@ describe('SolanaPayX402Bridge', () => {
       })).toString('base64')
 
       const result = bridge.extractPayment({
-        'x-payment': paymentHeader,
+        'payment-signature': paymentHeader,
       })
 
       expect(result).toBe(paymentHeader)
@@ -225,13 +223,12 @@ describe('SolanaPayX402Bridge', () => {
     it('returns error for invalid base64 header', async () => {
       const result = await bridge.verifyPayment('not-valid-base64!!!', {
         scheme: 'exact',
-        network: 'solana',
-        maxAmountRequired: '100000',
-        resource: 'http://localhost:3000/api/test',
-        description: 'Test',
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        amount: '100000',
         payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
         maxTimeoutSeconds: 300,
         asset: 'So11111111111111111111111111111111111111112',
+        extra: {},
       })
 
       expect(result.valid).toBe(false)
@@ -243,13 +240,12 @@ describe('SolanaPayX402Bridge', () => {
 
       const result = await bridge.verifyPayment(header, {
         scheme: 'exact',
-        network: 'solana',
-        maxAmountRequired: '100000',
-        resource: 'http://localhost:3000/api/test',
-        description: 'Test',
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        amount: '100000',
         payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
         maxTimeoutSeconds: 300,
         asset: 'So11111111111111111111111111111111111111112',
+        extra: {},
       })
 
       expect(result.valid).toBe(false)
@@ -266,13 +262,12 @@ describe('SolanaPayX402Bridge', () => {
 
       const result = await bridge.verifyPayment(header, {
         scheme: 'exact',
-        network: 'solana',
-        maxAmountRequired: '100000',
-        resource: 'http://localhost:3000/api/test',
-        description: 'Test',
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        amount: '100000',
         payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
         maxTimeoutSeconds: 300,
         asset: 'So11111111111111111111111111111111111111112',
+        extra: {},
       })
 
       expect(result.valid).toBe(false)
@@ -290,14 +285,13 @@ describe('SolanaPayX402Bridge', () => {
     it('creates 402 response with payment requirements', () => {
       const result = bridge.create402Response({
         scheme: 'exact',
-        network: 'solana',
-        maxAmountRequired: '100000',
-        resource: 'http://localhost:3000/api/test',
-        description: 'Test',
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        amount: '100000',
         payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
         maxTimeoutSeconds: 300,
         asset: 'So11111111111111111111111111111111111111112',
-      })
+        extra: {},
+      }, 'http://localhost:3000/api/test')
 
       expect(result.status).toBe(402)
       expect(result.body).toBeDefined()

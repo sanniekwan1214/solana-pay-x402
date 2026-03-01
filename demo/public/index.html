@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>x402 Demo</title>
+  <title>Solana Pay x402 Demo</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -14,7 +14,7 @@
       padding: 24px;
       font-size: 14px;
     }
-    .container { max-width: 720px; margin: 0 auto; }
+    .container { max-width: 760px; margin: 0 auto; }
     h1 { font-size: 16px; font-weight: 600; color: #58a6ff; margin-bottom: 8px; }
     .subtitle { color: #8b949e; margin-bottom: 24px; font-size: 12px; }
     .network-badge {
@@ -27,8 +27,56 @@
       margin-left: 8px;
     }
     .network-badge.devnet { background: #9e6a03; }
+
+    /* Flow comparison */
+    .comparison {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: #30363d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 24px;
+      font-size: 11px;
+    }
+    .comparison-col { background: #161b22; padding: 12px; }
+    .comparison-col h3 { color: #58a6ff; font-size: 12px; margin-bottom: 8px; }
+    .comparison-col ul { list-style: none; color: #8b949e; }
+    .comparison-col ul li { margin: 4px 0; }
+    .comparison-col ul li::before { content: ''; margin-right: 6px; }
+    .comparison-col .highlight { color: #7ee787; font-size: 10px; margin-top: 8px; font-weight: 600; }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 16px;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .tab {
+      flex: 1;
+      padding: 10px 16px;
+      text-align: center;
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      background: #161b22;
+      color: #8b949e;
+      border: none;
+      transition: all 0.15s;
+    }
+    .tab:first-child { border-right: 1px solid #30363d; }
+    .tab:hover { background: #1c2128; color: #c9d1d9; }
+    .tab.active { background: #1c2128; color: #58a6ff; font-weight: 600; border-bottom: 2px solid #58a6ff; }
+
+    /* Sections */
     .section { margin-bottom: 24px; }
     .section-title { color: #8b949e; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+
+    /* Endpoints */
     .endpoints { display: flex; flex-direction: column; gap: 8px; }
     .endpoint {
       display: flex;
@@ -45,6 +93,8 @@
     .endpoint.selected { border-color: #58a6ff; background: #1c2128; }
     .endpoint-path { color: #58a6ff; }
     .endpoint-price { color: #7ee787; font-weight: 500; }
+
+    /* Buttons */
     .btn {
       background: #238636;
       color: #fff;
@@ -61,6 +111,11 @@
     .btn:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
     .btn-secondary { background: #30363d; }
     .btn-secondary:hover { background: #3c444d; }
+    .btn-phantom { background: #ab9ff2; color: #000; font-weight: 600; }
+    .btn-phantom:hover { background: #bdb4f5; }
+    .btn-phantom:disabled { background: #21262d; color: #484f58; }
+
+    /* Panels */
     .panel {
       display: none;
       background: #161b22;
@@ -70,6 +125,79 @@
       margin-top: 16px;
     }
     .panel.active { display: block; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Wallet status */
+    .wallet-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 10px 16px;
+      margin-bottom: 12px;
+      font-size: 12px;
+    }
+    .wallet-bar.connected { border-color: #238636; }
+    .wallet-addr { color: #7ee787; }
+    .wallet-bal { color: #8b949e; margin-left: 12px; }
+
+    /* Steps */
+    .steps-tracker {
+      margin: 16px 0;
+      padding: 0;
+      list-style: none;
+    }
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 6px 0;
+      font-size: 12px;
+      color: #484f58;
+      transition: color 0.2s;
+    }
+    .step.active { color: #58a6ff; }
+    .step.complete { color: #7ee787; }
+    .step.error { color: #f85149; }
+    .step-icon {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid #30363d;
+      flex-shrink: 0;
+      margin-top: 1px;
+      position: relative;
+    }
+    .step.active .step-icon {
+      border-color: #58a6ff;
+      animation: pulse 1s infinite;
+    }
+    .step.complete .step-icon {
+      border-color: #238636;
+      background: #238636;
+    }
+    .step.complete .step-icon::after {
+      content: '';
+      position: absolute;
+      top: 2px; left: 4px;
+      width: 4px; height: 7px;
+      border: solid #fff;
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+    .step.error .step-icon {
+      border-color: #f85149;
+      background: #f85149;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* QR */
     .qr-wrap { text-align: center; padding: 16px; background: #fff; border-radius: 6px; margin: 16px 0; }
     .url-box {
       background: #0d1117;
@@ -85,17 +213,8 @@
     }
     .actions { display: flex; gap: 8px; margin-top: 12px; }
     .actions .btn { flex: 1; }
-    .steps {
-      background: #0d1117;
-      border: 1px solid #30363d;
-      border-radius: 4px;
-      padding: 12px;
-      margin: 16px 0;
-      font-size: 12px;
-      color: #8b949e;
-    }
-    .steps ol { padding-left: 20px; }
-    .steps li { margin: 6px 0; }
+
+    /* Result */
     .result {
       display: none;
       border-radius: 6px;
@@ -116,6 +235,8 @@
       font-size: 11px;
       color: #c9d1d9;
     }
+
+    /* Log */
     .log { margin-top: 24px; }
     .log-title { color: #8b949e; font-size: 11px; margin-bottom: 8px; }
     .log-box {
@@ -132,165 +253,499 @@
     .log-entry .info { color: #58a6ff; }
     .log-entry .ok { color: #7ee787; }
     .log-entry .err { color: #f85149; }
+    .log-entry .warn { color: #d29922; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Solana Pay x402 <span class="network-badge" id="networkBadge">mainnet</span></h1>
-    <p class="subtitle">HTTP 402 Payment Required Demo</p>
+    <p class="subtitle">Hybrid HTTP 402 Payment Demo &mdash; Two flows, one middleware</p>
 
+    <!-- Flow comparison -->
+    <div class="comparison">
+      <div class="comparison-col">
+        <h3>x402 v2 (Automatic)</h3>
+        <ul>
+          <li>Browser wallet signs tx</li>
+          <li>Facilitator submits tx</li>
+          <li>Facilitator pays gas</li>
+          <li>Fully programmatic</li>
+        </ul>
+        <div class="highlight">Best for: dApps, APIs, automation</div>
+      </div>
+      <div class="comparison-col">
+        <h3>Solana Pay (QR Code)</h3>
+        <ul>
+          <li>Mobile wallet scans QR</li>
+          <li>User submits tx on-chain</li>
+          <li>User pays gas</li>
+          <li>Works on any device</li>
+        </ul>
+        <div class="highlight">Best for: mobile, retail, POS</div>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('x402')">x402 v2 (Automatic)</button>
+      <button class="tab" onclick="switchTab('solanaPay')">Solana Pay (QR Code)</button>
+    </div>
+
+    <!-- Shared: Endpoints -->
     <div class="section">
       <div class="section-title">Endpoints</div>
       <div class="endpoints">
-        <div class="endpoint" onclick="select('/api/content', 0.00001)">
+        <div class="endpoint" onclick="selectEndpoint('/api/content', 10, '$0.00001 USDC')">
           <span class="endpoint-path">GET /api/content</span>
           <span class="endpoint-price">$0.00001 USDC</span>
         </div>
-        <div class="endpoint" onclick="select('/api/data/basic', 0.00005)">
+        <div class="endpoint" onclick="selectEndpoint('/api/data/basic', 50, '$0.00005 USDC')">
           <span class="endpoint-path">GET /api/data/basic</span>
           <span class="endpoint-price">$0.00005 USDC</span>
         </div>
-        <div class="endpoint" onclick="select('/api/data/premium', 0.0001)">
+        <div class="endpoint" onclick="selectEndpoint('/api/data/premium', 100, '$0.0001 USDC')">
           <span class="endpoint-path">GET /api/data/premium</span>
           <span class="endpoint-price">$0.0001 USDC</span>
         </div>
-        <div class="endpoint" onclick="select('/api/data/enterprise', 0.0005)">
+        <div class="endpoint" onclick="selectEndpoint('/api/data/enterprise', 500, '$0.0005 USDC')">
           <span class="endpoint-path">GET /api/data/enterprise</span>
           <span class="endpoint-price">$0.0005 USDC</span>
         </div>
       </div>
     </div>
 
-    <button class="btn" id="reqBtn" onclick="request()" disabled>Select endpoint</button>
+    <!-- x402 v2 Tab Content -->
+    <div class="tab-content active" id="x402Content">
+      <div class="wallet-bar" id="walletBar">
+        <div>
+          <span id="walletStatus">Wallet: Not connected</span>
+          <span class="wallet-bal" id="walletBalance"></span>
+        </div>
+        <button class="btn btn-phantom" style="width:auto; padding:6px 16px;" onclick="connectWallet()" id="connectBtn">Connect Phantom</button>
+      </div>
 
-    <div class="panel" id="payPanel">
-      <div class="section-title">Payment Required (HTTP 402)</div>
-      <div class="qr-wrap"><div id="qr"></div></div>
-      <div class="url-box" id="urlBox"></div>
-      <div class="actions">
-        <button class="btn btn-secondary" onclick="copy()">Copy URL</button>
-        <button class="btn btn-secondary" onclick="open_()">Open Wallet</button>
-      </div>
-      <div class="steps">
-        <ol>
-          <li>Scan QR with Phantom/Solflare</li>
-          <li>Approve transaction</li>
-          <li>Copy signature, click Verify</li>
-        </ol>
-      </div>
-      <button class="btn" onclick="verify()">Verify Payment</button>
+      <button class="btn" id="x402PayBtn" onclick="x402Pay()" disabled>Select endpoint</button>
+
+      <ul class="steps-tracker" id="stepsTracker" style="display:none;">
+        <li class="step" id="step1"><div class="step-icon"></div><span>Request endpoint &rarr; get 402 payment requirements</span></li>
+        <li class="step" id="step2"><div class="step-icon"></div><span>Parse payment requirements from response</span></li>
+        <li class="step" id="step3"><div class="step-icon"></div><span>Build transaction (fee payer = facilitator)</span></li>
+        <li class="step" id="step4"><div class="step-icon"></div><span>Sign with Phantom (not submitted)</span></li>
+        <li class="step" id="step5"><div class="step-icon"></div><span>Create x402 v2 payment payload</span></li>
+        <li class="step" id="step6"><div class="step-icon"></div><span>Send to server &rarr; facilitator submits &amp; verifies</span></li>
+      </ul>
     </div>
 
+    <!-- Solana Pay Tab Content -->
+    <div class="tab-content" id="solanaPayContent">
+      <button class="btn" id="spReqBtn" onclick="solanaPayRequest()" disabled>Select endpoint</button>
+
+      <div class="panel" id="spPayPanel">
+        <div class="section-title">Payment Required (HTTP 402)</div>
+        <div class="qr-wrap"><div id="qr"></div></div>
+        <div class="url-box" id="urlBox"></div>
+        <div class="actions">
+          <button class="btn btn-secondary" onclick="copyUrl()">Copy URL</button>
+          <button class="btn btn-secondary" onclick="openWallet()">Open Wallet</button>
+        </div>
+        <div style="background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:12px;margin:16px 0;font-size:12px;color:#8b949e;">
+          <ol style="padding-left:20px;">
+            <li style="margin:6px 0;">Scan QR with Phantom / Solflare</li>
+            <li style="margin:6px 0;">Approve the transaction</li>
+            <li style="margin:6px 0;">Copy the signature, click Verify</li>
+          </ol>
+        </div>
+        <button class="btn" onclick="solanaPayVerify()">Verify Payment</button>
+      </div>
+    </div>
+
+    <!-- Shared: Result -->
     <div class="result" id="result">
       <div class="result-title" id="resultTitle"></div>
       <pre id="resultData"></pre>
     </div>
 
+    <!-- Shared: Console -->
     <div class="log">
       <div class="log-title">Console</div>
       <div class="log-box" id="logBox"></div>
     </div>
   </div>
 
+  <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script>
-    let ep = null, data = null, network = 'mainnet-beta'
+    // ===== Destructure solanaWeb3 =====
+    const {
+      Connection, PublicKey, TransactionMessage, VersionedTransaction,
+      ComputeBudgetProgram, TransactionInstruction
+    } = solanaWeb3
+
+    // ===== Constants =====
+    const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+    const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL')
+
+    // ===== State =====
+    let selectedEndpoint = null   // { path, units, priceDisplay }
+    let activeTab = 'x402'
+    let network = 'mainnet-beta'
+    let phantomProvider = null
+    let connection = null
+    let paymentData402 = null
+
     const $ = id => document.getElementById(id)
 
-    fetch('/api/health').then(r => r.json()).then(d => {
-      network = d.network
-      $('networkBadge').textContent = d.network === 'devnet' ? 'devnet' : 'mainnet'
-      if (d.network === 'devnet') $('networkBadge').classList.add('devnet')
-      log('info', `Connected: ${d.network}, wallet: ${d.wallet.slice(0,8)}...`)
-    }).catch(() => log('err', 'Failed to connect'))
-
+    // ===== Utilities =====
     function log(type, msg) {
       const t = new Date().toLocaleTimeString()
       $('logBox').innerHTML += `<div class="log-entry"><span class="time">${t}</span> <span class="${type}">${msg}</span></div>`
       $('logBox').scrollTop = $('logBox').scrollHeight
     }
 
-    function select(path, price) {
-      ep = { path, price }
-      document.querySelectorAll('.endpoint').forEach(e => e.classList.remove('selected'))
-      event.currentTarget.classList.add('selected')
-      $('reqBtn').disabled = false
-      $('reqBtn').textContent = `Request ${path}`
-      $('payPanel').classList.remove('active')
-      $('result').classList.remove('active', 'success', 'error')
-      log('info', `Selected: ${path} ($${price} USDC)`)
-    }
-
-    async function request() {
-      if (!ep) return
-      log('info', `GET ${ep.path}`)
-      $('reqBtn').disabled = true
-
-      try {
-        const r = await fetch(ep.path)
-        if (r.status === 402) {
-          data = await r.json()
-          log('ok', `402 Payment Required`)
-          $('qr').innerHTML = ''
-          new QRCode($('qr'), { text: data.solanaPay.url, width: 200, height: 200, correctLevel: QRCode.CorrectLevel.L })
-          $('urlBox').textContent = data.solanaPay.url
-          $('payPanel').classList.add('active')
-        } else {
-          const d = await r.json()
-          log('ok', `${r.status} OK`)
-          show(true, d)
-        }
-      } catch (e) {
-        log('err', e.message)
-        show(false, { error: e.message })
-      }
-      $('reqBtn').disabled = false
-      $('reqBtn').textContent = `Request ${ep.path}`
-    }
-
-    function copy() {
-      navigator.clipboard.writeText(data.solanaPay.url)
-      log('info', 'URL copied')
-    }
-
-    function open_() {
-      window.location.href = data.solanaPay.url
-    }
-
-    async function verify() {
-      const sig = prompt('Transaction signature:')
-      if (!sig) return
-      log('info', `Verifying: ${sig.slice(0,16)}...`)
-
-      try {
-        // x402-solana expects base64-encoded JSON payment header
-        const paymentPayload = { signature: sig, scheme: 'exact' }
-        const paymentHeader = btoa(JSON.stringify(paymentPayload))
-
-        const r = await fetch(ep.path, {
-          headers: {
-            'X-Payment': paymentHeader
-          }
-        })
-        const d = await r.json()
-        if (r.ok) {
-          log('ok', 'Payment verified')
-          show(true, d)
-        } else {
-          log('err', d.message || 'Verification failed')
-          show(false, d)
-        }
-      } catch (e) {
-        log('err', e.message)
-        show(false, { error: e.message })
-      }
-    }
-
-    function show(ok, d) {
+    function showResult(ok, data) {
       $('result').className = `result active ${ok ? 'success' : 'error'}`
       $('resultTitle').textContent = ok ? 'Success' : 'Error'
-      $('resultData').textContent = JSON.stringify(d, null, 2)
+      $('resultData').textContent = JSON.stringify(data, null, 2)
     }
+
+    function uint8ToBase64(bytes) {
+      let binary = ''
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+      return btoa(binary)
+    }
+
+    // ===== Tab Switching =====
+    function switchTab(tab) {
+      activeTab = tab
+      document.querySelectorAll('.tab').forEach((t, i) => {
+        t.classList.toggle('active', (i === 0 && tab === 'x402') || (i === 1 && tab === 'solanaPay'))
+      })
+      $('x402Content').classList.toggle('active', tab === 'x402')
+      $('solanaPayContent').classList.toggle('active', tab === 'solanaPay')
+      $('result').classList.remove('active')
+      updateButtons()
+    }
+
+    // ===== Endpoint Selection =====
+    function selectEndpoint(path, units, priceDisplay) {
+      selectedEndpoint = { path, units, priceDisplay }
+      document.querySelectorAll('.endpoint').forEach(e => e.classList.remove('selected'))
+      event.currentTarget.classList.add('selected')
+      $('result').classList.remove('active', 'success', 'error')
+      $('spPayPanel').classList.remove('active')
+      resetSteps()
+      updateButtons()
+      log('info', `Selected: ${path} (${priceDisplay})`)
+    }
+
+    function updateButtons() {
+      const hasEp = !!selectedEndpoint
+      // x402
+      const walletReady = !!phantomProvider
+      $('x402PayBtn').disabled = !(hasEp && walletReady)
+      $('x402PayBtn').textContent = !hasEp ? 'Select endpoint' : !walletReady ? 'Connect wallet first' : `Pay ${selectedEndpoint.priceDisplay} & Access`
+      // Solana Pay
+      $('spReqBtn').disabled = !hasEp
+      $('spReqBtn').textContent = hasEp ? `Request ${selectedEndpoint.path}` : 'Select endpoint'
+    }
+
+    // ===== Health Check =====
+    fetch('/api/health').then(r => r.json()).then(d => {
+      network = d.network
+      $('networkBadge').textContent = d.network === 'devnet' ? 'devnet' : 'mainnet'
+      if (d.network === 'devnet') $('networkBadge').classList.add('devnet')
+      log('info', `Connected: ${d.network}, wallet: ${d.wallet.slice(0,8)}...`)
+    }).catch(() => log('err', 'Server not reachable'))
+
+    // ===== SPL Token Helpers (no @solana/spl-token needed) =====
+
+    function getAssociatedTokenAddress(mint, owner) {
+      const [addr] = PublicKey.findProgramAddressSync(
+        [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      )
+      return addr
+    }
+
+    function buildTransferCheckedIx(source, mint, dest, owner, amount, decimals) {
+      // TransferChecked = instruction index 12
+      // Data: [12 (u8), amount (u64 LE), decimals (u8)]
+      const data = new Uint8Array(1 + 8 + 1)
+      data[0] = 12
+      const amtBig = BigInt(amount)
+      for (let i = 0; i < 8; i++) data[1 + i] = Number((amtBig >> BigInt(i * 8)) & 0xffn)
+      data[9] = decimals
+
+      return new TransactionInstruction({
+        programId: TOKEN_PROGRAM_ID,
+        keys: [
+          { pubkey: source, isSigner: false, isWritable: true },
+          { pubkey: mint,   isSigner: false, isWritable: false },
+          { pubkey: dest,   isSigner: false, isWritable: true },
+          { pubkey: owner,  isSigner: true,  isWritable: false },
+        ],
+        data,
+      })
+    }
+
+    // ===== Step Tracker =====
+    function resetSteps() {
+      $('stepsTracker').style.display = 'none'
+      for (let i = 1; i <= 6; i++) {
+        $(`step${i}`).className = 'step'
+      }
+    }
+
+    function updateStep(n, state) {
+      $('stepsTracker').style.display = 'block'
+      $(`step${n}`).className = `step ${state}`
+    }
+
+    // ===== Wallet Connection =====
+    async function connectWallet() {
+      if (!('solana' in window) || !window.solana.isPhantom) {
+        log('err', 'Phantom wallet not found — install from phantom.app')
+        window.open('https://phantom.app/', '_blank')
+        return
+      }
+      try {
+        const resp = await window.solana.connect()
+        phantomProvider = window.solana
+        // Use local RPC proxy to avoid CORS issues with public Solana RPC
+        connection = new Connection(location.origin + '/rpc', 'confirmed')
+
+        const addr = resp.publicKey.toString()
+        $('walletBar').classList.add('connected')
+        $('walletStatus').innerHTML = `Wallet: <span class="wallet-addr">${addr.slice(0,4)}...${addr.slice(-4)}</span>`
+        $('connectBtn').textContent = 'Connected'
+        $('connectBtn').disabled = true
+        updateButtons()
+        log('ok', `Wallet connected: ${addr}`)
+
+        // Fetch balance (non-blocking)
+        connection.getBalance(resp.publicKey).then(bal => {
+          $('walletBalance').textContent = `(${(bal / 1e9).toFixed(4)} SOL)`
+        }).catch(() => {})
+      } catch (err) {
+        log('err', 'Wallet connection failed: ' + err.message)
+      }
+    }
+
+    // ===== x402 v2 Flow =====
+    async function x402Pay() {
+      if (!selectedEndpoint || !phantomProvider) return
+      resetSteps()
+      $('result').classList.remove('active', 'success', 'error')
+
+      try {
+        // Step 1: Request endpoint, get 402
+        updateStep(1, 'active')
+        log('info', `[x402] GET ${selectedEndpoint.path}`)
+        const resp = await fetch(selectedEndpoint.path)
+
+        if (resp.status !== 402) {
+          updateStep(1, 'complete')
+          const data = await resp.json()
+          log('ok', `[x402] ${resp.status} — no payment needed`)
+          showResult(true, data)
+          return
+        }
+
+        paymentData402 = await resp.json()
+        updateStep(1, 'complete')
+        log('ok', '[x402] 402 Payment Required')
+
+        // Step 2: Parse payment requirements
+        updateStep(2, 'active')
+        const accepts = paymentData402.accepts || []
+        const req = accepts.find(r => r.scheme === 'exact' && (r.network || '').startsWith('solana'))
+        if (!req) throw new Error('No Solana payment requirements in 402 response')
+
+        const feePayer = req.extra?.feePayer
+        if (!feePayer) throw new Error('Missing facilitator feePayer in payment requirements')
+
+        log('info', `[x402] Amount: ${req.amount} | Asset: ${req.asset}`)
+        log('info', `[x402] Pay to: ${req.payTo}`)
+        log('info', `[x402] Fee payer (facilitator): ${feePayer}`)
+        updateStep(2, 'complete')
+
+        // Step 3: Build VersionedTransaction
+        updateStep(3, 'active')
+        const feePayerPk = new PublicKey(feePayer)
+        const userPk = phantomProvider.publicKey
+        const mintPk = new PublicKey(req.asset)
+        const destPk = new PublicKey(req.payTo)
+
+        const sourceAta = getAssociatedTokenAddress(mintPk, userPk)
+        const destAta = getAssociatedTokenAddress(mintPk, destPk)
+        log('info', `[x402] Source ATA: ${sourceAta.toString().slice(0,8)}...`)
+        log('info', `[x402] Dest ATA: ${destAta.toString().slice(0,8)}...`)
+
+        // Determine decimals from known mints, fallback to 6 (USDC default)
+        const knownDecimals = {
+          'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': 6, // USDC
+          'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': 6, // USDT
+          'So11111111111111111111111111111111111111112': 9,    // SOL
+        }
+        const decimals = knownDecimals[req.asset] || 6
+
+        const instructions = [
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 20000 }),
+          ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 }),
+          buildTransferCheckedIx(sourceAta, mintPk, destAta, userPk, req.amount, decimals),
+        ]
+
+        const { blockhash } = await connection.getLatestBlockhash('confirmed')
+        const messageV0 = new TransactionMessage({
+          payerKey: feePayerPk,
+          recentBlockhash: blockhash,
+          instructions,
+        }).compileToV0Message()
+
+        const transaction = new VersionedTransaction(messageV0)
+        updateStep(3, 'complete')
+        log('ok', '[x402] Transaction built (fee payer = facilitator)')
+
+        // Step 4: Sign with Phantom (NOT submit)
+        updateStep(4, 'active')
+        log('info', '[x402] Requesting Phantom signature...')
+        const signedTx = await phantomProvider.signTransaction(transaction)
+        updateStep(4, 'complete')
+        log('ok', '[x402] Transaction signed (NOT submitted to chain)')
+
+        // Step 5: Create v2 payment payload
+        updateStep(5, 'active')
+        const serialized = signedTx.serialize()
+        const base64Tx = uint8ToBase64(serialized)
+
+        const resourceUrl = paymentData402.resource?.url || `${location.origin}${selectedEndpoint.path}`
+        const paymentPayload = {
+          x402Version: 2,
+          resource: {
+            url: resourceUrl,
+            description: req.extra?.description || '',
+            mimeType: req.extra?.mimeType || 'application/json',
+          },
+          accepted: req,
+          payload: { transaction: base64Tx },
+        }
+
+        const paymentHeader = btoa(JSON.stringify(paymentPayload))
+        updateStep(5, 'complete')
+        log('ok', '[x402] Payment payload created (x402Version: 2)')
+
+        // Step 6: Send to server
+        updateStep(6, 'active')
+        log('info', '[x402] Sending payment header — facilitator will submit tx...')
+        const verifyResp = await fetch(selectedEndpoint.path, {
+          headers: { 'PAYMENT-SIGNATURE': paymentHeader },
+        })
+        const result = await verifyResp.json()
+
+        if (verifyResp.ok) {
+          updateStep(6, 'complete')
+          log('ok', '[x402] Payment verified — content received!')
+          showResult(true, result)
+        } else {
+          updateStep(6, 'error')
+          log('err', `[x402] Verification failed: ${result.message || result.error}`)
+          showResult(false, result)
+        }
+
+      } catch (err) {
+        log('err', `[x402] ${err.message}`)
+        showResult(false, { error: err.message })
+        // Mark current active step as error
+        for (let i = 1; i <= 6; i++) {
+          if ($(`step${i}`).classList.contains('active')) {
+            updateStep(i, 'error')
+            break
+          }
+        }
+      }
+    }
+
+    // ===== Solana Pay Flow =====
+    async function solanaPayRequest() {
+      if (!selectedEndpoint) return
+      log('info', `[SP] GET ${selectedEndpoint.path}`)
+      $('spReqBtn').disabled = true
+      $('result').classList.remove('active', 'success', 'error')
+
+      try {
+        const r = await fetch(selectedEndpoint.path)
+        if (r.status === 402) {
+          paymentData402 = await r.json()
+          log('ok', '[SP] 402 Payment Required — scan QR')
+          $('qr').innerHTML = ''
+          new QRCode($('qr'), {
+            text: paymentData402.solanaPay.url,
+            width: 200, height: 200,
+            correctLevel: QRCode.CorrectLevel.L,
+          })
+          $('urlBox').textContent = paymentData402.solanaPay.url
+          $('spPayPanel').classList.add('active')
+        } else {
+          const data = await r.json()
+          log('ok', `[SP] ${r.status} OK`)
+          showResult(true, data)
+        }
+      } catch (e) {
+        log('err', `[SP] ${e.message}`)
+        showResult(false, { error: e.message })
+      }
+      $('spReqBtn').disabled = false
+      $('spReqBtn').textContent = `Request ${selectedEndpoint.path}`
+    }
+
+    function copyUrl() {
+      if (paymentData402?.solanaPay?.url) {
+        navigator.clipboard.writeText(paymentData402.solanaPay.url)
+        log('info', '[SP] URL copied to clipboard')
+      }
+    }
+
+    function openWallet() {
+      if (paymentData402?.solanaPay?.url) {
+        window.location.href = paymentData402.solanaPay.url
+      }
+    }
+
+    async function solanaPayVerify() {
+      const sig = prompt('Transaction signature:')
+      if (!sig) return
+      log('info', `[SP] Verifying: ${sig.slice(0, 16)}...`)
+
+      try {
+        const payload = { signature: sig, scheme: 'exact' }
+        const header = btoa(JSON.stringify(payload))
+
+        const r = await fetch(selectedEndpoint.path, {
+          headers: { 'PAYMENT-SIGNATURE': header },
+        })
+        const data = await r.json()
+        if (r.ok) {
+          log('ok', '[SP] Payment verified!')
+          showResult(true, data)
+        } else {
+          log('err', `[SP] ${data.message || 'Verification failed'}`)
+          showResult(false, data)
+        }
+      } catch (e) {
+        log('err', `[SP] ${e.message}`)
+        showResult(false, { error: e.message })
+      }
+    }
+
+    // ===== Auto-connect Phantom =====
+    window.addEventListener('load', async () => {
+      if ('solana' in window && window.solana.isPhantom) {
+        try {
+          const resp = await window.solana.connect({ onlyIfTrusted: true })
+          if (resp) connectWallet()
+        } catch {}
+      }
+    })
   </script>
 </body>
 </html>

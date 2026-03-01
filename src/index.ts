@@ -7,8 +7,7 @@ export type {
   PaymentVerification,
   SignatureStore,
   SplTokenConfig,
-  X402PaymentRequirements,
-  X402PaymentHeader,
+  PaymentRequirements,
 } from './types'
 
 export { solanaPay402, getPaymentInfo } from './express'

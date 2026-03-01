@@ -2,13 +2,13 @@ import { Connection, PublicKey, Keypair } from '@solana/web3.js'
 import { encodeURL } from '@solana/pay'
 import BigNumber from 'bignumber.js'
 import { X402PaymentHandler } from 'x402-solana/server'
+import type { PaymentRequirements } from 'x402-solana/types'
 import type {
   SolanaPayX402Config,
   PaymentRequest,
   SolanaPayUrl,
   PaymentVerification,
   SignatureStore,
-  X402PaymentRequirements,
 } from '../types'
 import { InMemorySignatureStore } from '../types'
 
@@ -120,25 +120,20 @@ export class SolanaPayX402Bridge {
       ? payment.amount.toString()
       : payment.amount
 
-    const priceConfig = {
+    const routeConfig = {
       amount,
       asset: { address: tokenAddress, decimals },
+      description: payment.label || this.config.label,
     }
 
-    const paymentRequirements = await this.x402Handler.createPaymentRequirements({
-      price: priceConfig,
-      network: this.config.network === 'devnet' ? 'solana-devnet' : 'solana',
-      config: {
-        description: payment.label || this.config.label,
-        resource: resource as `${string}://${string}`,
-      },
-    })
+    const paymentRequirements = await this.x402Handler.createPaymentRequirements(routeConfig, resource)
 
     const solanaPayUrl = await this.createSolanaPayUrl(payment)
 
     return {
       paymentRequirements,
       solanaPayUrl,
+      resource,
     }
   }
 
@@ -182,8 +177,8 @@ export class SolanaPayX402Bridge {
   /**
    * Create 402 response using x402-solana handler
    */
-  create402Response(paymentRequirements: X402PaymentRequirements) {
-    return this.x402Handler.create402Response(paymentRequirements as Parameters<typeof this.x402Handler.create402Response>[0])
+  create402Response(paymentRequirements: PaymentRequirements, resourceUrl: string) {
+    return this.x402Handler.create402Response(paymentRequirements, resourceUrl)
   }
 
   /**
@@ -200,13 +195,12 @@ export class SolanaPayX402Bridge {
    */
   async verifyPayment(
     paymentHeader: string,
-    paymentRequirements: X402PaymentRequirements
+    paymentRequirements: PaymentRequirements
   ): Promise<PaymentVerification> {
-    // Decode base64 to get signature
-    let signature: string
+    // Decode base64 to get payment payload
+    let decoded: Record<string, unknown>
     try {
-      const decoded = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'))
-      signature = decoded.signature
+      decoded = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'))
     } catch {
       return {
         valid: false,
@@ -215,7 +209,13 @@ export class SolanaPayX402Bridge {
       }
     }
 
-    if (!signature) {
+    // Determine if this is a v2 x402 payload or a Solana Pay (v1-style) payload
+    // v2: { x402Version: 2, resource: {...}, accepted: {...}, payload: {...} }
+    // Solana Pay: { signature: "tx-sig", scheme: "exact" }
+    const isV2Payload = 'x402Version' in decoded && decoded.x402Version === 2
+    const signature = isV2Payload ? '' : (decoded.signature as string)
+
+    if (!isV2Payload && !signature) {
       return {
         valid: false,
         signature: '',
@@ -223,56 +223,60 @@ export class SolanaPayX402Bridge {
       }
     }
 
-    // Check for replay attack
-    const alreadyUsed = await this.signatureStore.has(signature)
-    if (alreadyUsed) {
-      return {
-        valid: false,
-        signature,
-        error: 'Payment signature already used',
+    // Check for replay attack (only for Solana Pay flow where we have a known signature)
+    if (signature) {
+      const alreadyUsed = await this.signatureStore.has(signature)
+      if (alreadyUsed) {
+        return {
+          valid: false,
+          signature,
+          error: 'Payment signature already used',
+        }
       }
     }
 
     try {
-      // Try x402 facilitator verification first
-      try {
-        debugLog('verify', 'Initiating facilitator verification', {
-          signature,
-          paymentHeaderBase64: paymentHeader,
-          paymentRequirements: {
-            scheme: paymentRequirements.scheme,
-            network: paymentRequirements.network,
-            maxAmountRequired: paymentRequirements.maxAmountRequired,
-            resource: paymentRequirements.resource,
-            payTo: paymentRequirements.payTo,
-          },
-        })
+      // v2 x402 payload: use facilitator (the proper x402 flow)
+      if (isV2Payload) {
+        try {
+          debugLog('verify', 'v2 payload detected, using facilitator verification', {
+            x402Version: decoded.x402Version,
+          })
 
-        const verified = await this.x402Handler.verifyPayment(paymentHeader, paymentRequirements as Parameters<typeof this.x402Handler.verifyPayment>[1])
+          const verified = await this.x402Handler.verifyPayment(paymentHeader, paymentRequirements)
 
-        debugLog('verify', 'Facilitator response received', {
-          result: verified as Record<string, unknown>,
-        })
+          debugLog('verify', 'Facilitator response received', {
+            result: verified as Record<string, unknown>,
+          })
 
-        if (verified && (verified as { isValid?: boolean }).isValid) {
-          debugLog('verify', 'Facilitator verification SUCCESS')
-          await this.signatureStore.add(signature)
+          if (verified && verified.isValid) {
+            debugLog('verify', 'Facilitator verification SUCCESS')
+            return {
+              valid: true,
+              signature: '',
+              amount: parseInt(paymentRequirements.amount),
+            }
+          }
+
           return {
-            valid: true,
-            signature,
-            amount: parseInt(paymentRequirements.maxAmountRequired),
+            valid: false,
+            signature: '',
+            error: verified?.invalidReason || 'Facilitator verification failed',
+          }
+        } catch (err) {
+          debugLog('verify', 'Facilitator verification failed', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+          return {
+            valid: false,
+            signature: '',
+            error: err instanceof Error ? err.message : 'Facilitator verification failed',
           }
         }
-        debugLog('verify', 'Facilitator returned invalid, falling back to on-chain')
-      } catch (err) {
-        debugLog('verify', 'Facilitator verification failed', {
-          error: err instanceof Error ? err.message : String(err),
-          stack: err instanceof Error ? err.stack : undefined,
-        })
-        debugLog('verify', 'Falling back to on-chain verification')
       }
 
-      // Fallback: Direct on-chain verification
+      // Solana Pay flow: verify directly on-chain (facilitator cannot handle pre-submitted tx)
+      debugLog('verify', 'Solana Pay payload detected, using on-chain verification', { signature })
       debugLog('onchain', 'Fetching transaction from RPC', { signature })
 
       const tx = await this.connection.getTransaction(signature, {
@@ -296,7 +300,7 @@ export class SolanaPayX402Bridge {
         blockTime: tx.blockTime,
       })
 
-      const expectedAmount = parseInt(paymentRequirements.maxAmountRequired)
+      const expectedAmount = parseInt(paymentRequirements.amount)
       const recipientPubkey = new PublicKey(paymentRequirements.payTo)
       const tokenMint = this.config.splToken?.mint.toString()
 
@@ -397,29 +401,37 @@ export class SolanaPayX402Bridge {
   }
 
   /**
-   * Settle payment through facilitator
+   * Settle payment through facilitator.
+   *
+   * v2 x402 flow: facilitator submits the signed transaction and settles.
+   * Solana Pay flow: transaction is already on-chain, settlement is a no-op.
    */
   async settlePayment(
     paymentHeader: string,
-    paymentRequirements: X402PaymentRequirements
+    paymentRequirements: PaymentRequirements
   ): Promise<string | null> {
     if (!this.config.autoSettle) {
       debugLog('settle', 'Auto-settle disabled, skipping')
       return null
     }
 
+    // Detect payload type — skip facilitator for Solana Pay (v1-style) payloads
     try {
-      debugLog('settle', 'Initiating facilitator settlement', {
-        paymentHeaderBase64: paymentHeader,
-        paymentRequirements: {
-          scheme: paymentRequirements.scheme,
-          network: paymentRequirements.network,
-          maxAmountRequired: paymentRequirements.maxAmountRequired,
-          payTo: paymentRequirements.payTo,
-        },
-      })
+      const decoded = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'))
+      if (!('x402Version' in decoded) || decoded.x402Version !== 2) {
+        // Solana Pay flow: tx already submitted on-chain, no facilitator settlement needed
+        debugLog('settle', 'Solana Pay flow detected, tx already on-chain, skipping facilitator')
+        return (decoded.signature as string) || null
+      }
+    } catch {
+      return null
+    }
 
-      const settlement = await this.x402Handler.settlePayment(paymentHeader, paymentRequirements as Parameters<typeof this.x402Handler.settlePayment>[1])
+    // v2 x402 flow: facilitator submits and settles the transaction
+    try {
+      debugLog('settle', 'v2 payload, initiating facilitator settlement')
+
+      const settlement = await this.x402Handler.settlePayment(paymentHeader, paymentRequirements)
 
       debugLog('settle', 'Facilitator settlement response', {
         result: settlement as Record<string, unknown>,
@@ -429,7 +441,6 @@ export class SolanaPayX402Bridge {
     } catch (err) {
       debugLog('settle', 'Facilitator settlement failed', {
         error: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
       })
       return null
     }

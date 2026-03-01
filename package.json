@@ -1,7 +1,7 @@
 {
   "name": "solana-pay-x402",
   "version": "0.1.0",
-  "description": "Express middleware for integrating Solana Pay with x402 HTTP payment protocol",
+  "description": "Express middleware for HTTP 402 payments on Solana. Supports x402 v2 (programmatic, facilitator-managed) and Solana Pay (QR code, on-chain) from a single integration.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -52,7 +52,7 @@
     "@solana/spl-token": "^0.4.0",
     "@solana/web3.js": "^1.95.0",
     "bignumber.js": "^9.3.1",
-    "x402-solana": "^0.1.5",
+    "x402-solana": "^2.0.4",
     "zod": "^3.22.4"
   },
   "devDependencies": {

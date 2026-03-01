@@ -105,30 +105,9 @@ export interface SolanaPayUrl {
 }
 
 /**
- * x402 payment requirements structure
+ * Re-export PaymentRequirements from x402-solana v2
  */
-export interface X402PaymentRequirements {
-  scheme: string
-  network: string
-  maxAmountRequired: string
-  resource: string
-  description: string
-  mimeType?: string
-  payTo: string
-  maxTimeoutSeconds: number
-  asset: string
-  outputSchema?: unknown
-  extra?: Record<string, unknown>
-}
-
-/**
- * x402 payment header structure
- */
-export interface X402PaymentHeader {
-  signature: string
-  chainId?: string
-  scheme?: string
-}
+export type { PaymentRequirements } from 'x402-solana/types'
 
 /**
  * Payment verification result
