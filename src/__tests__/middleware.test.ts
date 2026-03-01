@@ -58,6 +58,7 @@ describe('solanaPay402 middleware', () => {
     mockRes = {
       status: vi.fn().mockReturnThis(),
       json: vi.fn().mockReturnThis(),
+      setHeader: vi.fn(),
     }
 
     mockNext = vi.fn()

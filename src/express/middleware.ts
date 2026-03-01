@@ -99,6 +99,10 @@ async function sendPaymentChallenge(
 
   const response402 = bridge.create402Response(paymentRequirements, resource)
 
+  // x402 v2 spec: set PAYMENT-REQUIRED header (base64-encoded payment requirements)
+  const paymentRequiredHeader = Buffer.from(JSON.stringify(response402.body)).toString('base64')
+  res.setHeader('PAYMENT-REQUIRED', paymentRequiredHeader)
+
   res.status(402).json({
     ...response402.body,
     solanaPay: {
