@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express'
 import path from 'path'
-import { solanaPay402, getPaymentInfo } from '../src'
+import { solanaPay402, getPaymentInfo } from '../src/express'
 
 const app = express()
 const PORT = process.env.PORT || 3000

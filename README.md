@@ -270,7 +270,7 @@ Always test on devnet before deploying to mainnet. The authors are not liable fo
 
 ## License
 
-Apache-2.0
+MIT
 
 ## Links
 

@@ -11,5 +11,6 @@ export type {
   PaymentRequirements,
 } from './types'
 
-export { solanaPay402, getPaymentInfo } from './express'
-export type { ExpressMiddlewareOptions } from './express'
+// Framework-specific exports are available via subpath imports:
+//   import { solanaPay402 } from 'solana-pay-x402/express'
+//   import { withSolanaPay402 } from 'solana-pay-x402/nextjs'
