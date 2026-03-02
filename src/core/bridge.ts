@@ -14,8 +14,6 @@ import { InMemorySignatureStore } from '../types'
 
 import { debugLog, setupFetchInterceptor } from '../utils/debug'
 
-setupFetchInterceptor()
-
 const SOL_DECIMALS = 9
 const SOL_MINT = 'So11111111111111111111111111111111111111112'
 
@@ -102,6 +100,8 @@ export class SolanaPayX402Bridge {
 
     const x402Network = this.config.network === 'devnet' ? 'solana-devnet' : 'solana'
 
+    setupFetchInterceptor()
+
     this.x402Handler = new X402PaymentHandler({
       network: x402Network,
       treasuryAddress: this.config.recipient.toString(),
@@ -177,8 +177,8 @@ export class SolanaPayX402Bridge {
   /**
    * Create 402 response using x402-solana handler
    */
-  create402Response(paymentRequirements: PaymentRequirements, resourceUrl: string) {
-    return this.x402Handler.create402Response(paymentRequirements, resourceUrl)
+  create402Response(paymentRequirements: PaymentRequirements, resourceUrl: string): { status: 402; body: Record<string, unknown> } {
+    return this.x402Handler.create402Response(paymentRequirements, resourceUrl) as { status: 402; body: Record<string, unknown> }
   }
 
   /**

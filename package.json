@@ -28,16 +28,19 @@
     "solana",
     "solana-pay",
     "x402",
+    "http-402",
     "payments",
+    "micropayments",
     "crypto",
     "middleware",
-    "express"
+    "express",
+    "ai-agent"
   ],
-  "author": "",
+  "author": "Sannie Kwan",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yourusername/solana-pay-x402.git"
+    "url": "git+https://github.com/sanniekwan1214/solana-pay-x402.git"
   },
   "files": [
     "dist",
@@ -49,11 +52,9 @@
   },
   "dependencies": {
     "@solana/pay": "^0.2.5",
-    "@solana/spl-token": "^0.4.0",
     "@solana/web3.js": "^1.95.0",
     "bignumber.js": "^9.3.1",
-    "x402-solana": "^2.0.4",
-    "zod": "^3.22.4"
+    "x402-solana": "^2.0.4"
   },
   "devDependencies": {
     "@types/bignumber.js": "^5.0.4",
