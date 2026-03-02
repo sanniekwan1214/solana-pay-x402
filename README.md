@@ -1,6 +1,6 @@
 # Solana Pay x402
 
-Express middleware that puts any API endpoint behind a Solana payment. Drop it into a route and your endpoint returns `402 Payment Required` until the client pays.
+Middleware that puts any API endpoint behind a Solana payment. Works with Express and Next.js. Drop it into a route and your endpoint returns `402 Payment Required` until the client pays.
 
 Two payment flows, one middleware — the server figures out which one the client is using:
 
@@ -12,6 +12,8 @@ Two payment flows, one middleware — the server figures out which one the clien
 ```bash
 npm install solana-pay-x402
 ```
+
+### Express
 
 ```typescript
 import express from 'express'
@@ -32,6 +34,25 @@ app.get('/api/premium',
 )
 
 app.listen(3000)
+```
+
+### Next.js (App Router)
+
+```typescript
+// app/api/premium/route.ts
+import { withSolanaPay402 } from 'solana-pay-x402/nextjs'
+
+export const GET = withSolanaPay402(async (req, { payment }) => {
+  return Response.json({
+    content: 'You paid for this.',
+    txSignature: payment?.signature,
+  })
+}, {
+  rpcUrl: process.env.SOLANA_RPC_URL!,
+  recipient: process.env.MERCHANT_WALLET!,
+  network: 'devnet',
+  getPaymentAmount: () => 0.01 * 1e9,
+})
 ```
 
 That's it. The middleware handles the 402 response, payment verification, and settlement.
@@ -98,6 +119,8 @@ x402 clients read the `accepts` array. Solana Pay clients use the `solanaPay.url
 
 ## Configuration
 
+### Express
+
 ```typescript
 solanaPay402({
   // Required
@@ -126,6 +149,35 @@ solanaPay402({
     console.error('Failed:', error)
   },
 })
+```
+
+### Next.js
+
+```typescript
+withSolanaPay402(handler, {
+  // Same config as Express, except:
+  // - getPaymentAmount receives a web standard Request (not Express req)
+  // - Payment info is passed via context, not attached to req
+
+  rpcUrl: process.env.SOLANA_RPC_URL!,
+  recipient: process.env.MERCHANT_WALLET!,
+  getPaymentAmount: (req) => 1000000,
+
+  // Callbacks receive Request instead of Express req
+  onPaymentVerified: (req, verification) => {
+    console.log('Paid:', verification.signature)
+  },
+})
+```
+
+The handler receives a `PaymentContext` as the second argument:
+
+```typescript
+export const GET = withSolanaPay402(async (req, { payment }) => {
+  // payment is undefined if no payment was required (amount was null/0)
+  // payment.valid, payment.signature, payment.amount when paid
+  return Response.json({ data: 'content' })
+}, options)
 ```
 
 ## Examples
@@ -165,6 +217,38 @@ app.get('/api/premium',
   }
 )
 ```
+
+### Multi-Token Pricing
+
+Accept multiple tokens on the same endpoint. The 402 response includes one entry per token in the `accepts` array, and the client picks which one to pay with.
+
+```typescript
+app.get('/api/premium',
+  solanaPay402({
+    rpcUrl: process.env.SOLANA_RPC_URL,
+    recipient: process.env.MERCHANT_WALLET,
+    getPaymentAmount: () => 100, // base amount in USDC atomic units
+    acceptedTokens: [
+      { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6, label: 'USDC' },
+      {
+        mint: 'So11111111111111111111111111111111111111112',
+        decimals: 9,
+        label: 'SOL',
+        // Convert USDC amount to SOL using live exchange rate
+        amount: async (baseAmount) => {
+          const price = await fetchSolPrice() // your price fetcher
+          return Math.ceil(Number(baseAmount) / price)
+        },
+      },
+    ],
+  }),
+  (req, res) => {
+    res.json({ content: 'Paid with USDC or SOL' })
+  }
+)
+```
+
+The same `acceptedTokens` option works in the Next.js adapter.
 
 ### Reading Payment Info After Verification
 
@@ -235,13 +319,15 @@ Open `http://localhost:3000` — pick an endpoint, try x402 with Phantom browser
 
 | | solana-pay-x402 | x402-solana |
 |---|---|---|
-| What it is | Express middleware | Protocol implementation |
+| What it is | Express + Next.js middleware | Protocol implementation |
 | Solana Pay QR | Built-in | Not included |
 | x402 v2 | Built-in | Built-in |
+| Multi-token | Built-in with async price converters | Manual |
+| Frameworks | Express, Next.js App Router | Bring your own |
 | Setup | One-line middleware | Wire it up yourself |
-| Best for | Ship fast on Express | Custom setups, other frameworks |
+| Best for | Ship fast | Custom setups |
 
-This package uses `x402-solana` under the hood. If you're on Express and want both payment flows without the plumbing, this is the shortcut.
+This package uses `x402-solana` under the hood. If you're on Express or Next.js and want both payment flows without the plumbing, this is the shortcut.
 
 ## Development
 
