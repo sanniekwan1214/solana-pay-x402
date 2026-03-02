@@ -92,23 +92,34 @@ async function sendPaymentChallenge(
   // Use path only (without query params) to avoid mismatch between challenge and verification
   const resource = `${req.protocol}://${req.get('host')}${req.path}`
 
-  const { paymentRequirements, solanaPayUrl } = await bridge.createPaymentChallenge(
-    paymentRequest,
-    resource
-  )
+  let responseBody: Record<string, unknown>
+  let solanaPayData: { url: string; reference: string }
 
-  const response402 = bridge.create402Response(paymentRequirements, resource)
+  if (bridge.isMultiToken()) {
+    const { paymentRequirements, solanaPayUrl } = await bridge.createMultiTokenPaymentChallenge(
+      paymentRequest,
+      resource
+    )
+    const response402 = bridge.create402ResponseMultiToken(paymentRequirements, resource)
+    responseBody = response402.body
+    solanaPayData = { url: solanaPayUrl.url, reference: solanaPayUrl.reference.toString() }
+  } else {
+    const { paymentRequirements, solanaPayUrl } = await bridge.createPaymentChallenge(
+      paymentRequest,
+      resource
+    )
+    const response402 = bridge.create402Response(paymentRequirements, resource)
+    responseBody = response402.body
+    solanaPayData = { url: solanaPayUrl.url, reference: solanaPayUrl.reference.toString() }
+  }
 
   // x402 v2 spec: set PAYMENT-REQUIRED header (base64-encoded payment requirements)
-  const paymentRequiredHeader = Buffer.from(JSON.stringify(response402.body)).toString('base64')
+  const paymentRequiredHeader = Buffer.from(JSON.stringify(responseBody)).toString('base64')
   res.setHeader('PAYMENT-REQUIRED', paymentRequiredHeader)
 
   res.status(402).json({
-    ...response402.body,
-    solanaPay: {
-      url: solanaPayUrl.url,
-      reference: solanaPayUrl.reference.toString(),
-    },
+    ...responseBody,
+    solanaPay: solanaPayData,
   })
 }
 
@@ -135,18 +146,26 @@ async function handlePaymentVerification(
 
   const resource = `${req.protocol}://${req.get('host')}${req.path}`
 
-  const decimals = options.splToken?.decimals ?? 9
-  const tokenAddress = options.splToken
-    ? (typeof options.splToken.mint === 'string' ? options.splToken.mint : options.splToken.mint.toString())
-    : 'So11111111111111111111111111111111111111112'
+  let paymentRequirements: PaymentRequirements
 
-  const routeConfig = {
-    amount,
-    asset: { address: tokenAddress, decimals },
-    description: options.label || 'Payment',
+  if (bridge.isMultiToken()) {
+    paymentRequirements = await resolveMultiTokenRequirements(
+      bridge, options, paymentHeader, amount, resource
+    )
+  } else {
+    const decimals = options.splToken?.decimals ?? 9
+    const tokenAddress = options.splToken
+      ? (typeof options.splToken.mint === 'string' ? options.splToken.mint : options.splToken.mint.toString())
+      : 'So11111111111111111111111111111111111111112'
+
+    const routeConfig = {
+      amount,
+      asset: { address: tokenAddress, decimals },
+      description: options.label || 'Payment',
+    }
+
+    paymentRequirements = await bridge.getX402Handler().createPaymentRequirements(routeConfig, resource) as PaymentRequirements
   }
-
-  const paymentRequirements = await bridge.getX402Handler().createPaymentRequirements(routeConfig, resource) as PaymentRequirements
 
   const verification = await bridge.verifyPayment(paymentHeader, paymentRequirements)
 
@@ -175,6 +194,64 @@ async function handlePaymentVerification(
   }).catch(() => {})
 
   next()
+}
+
+async function resolveMultiTokenRequirements(
+  bridge: SolanaPayX402Bridge,
+  options: ExpressMiddlewareOptions,
+  paymentHeader: string,
+  baseAmount: string,
+  resource: string
+): Promise<PaymentRequirements> {
+  // Extract which token the client chose from the v2 payload's accepted field
+  let acceptedAsset: string | undefined
+  try {
+    const decoded = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'))
+    if (decoded.x402Version === 2 && decoded.accepted) {
+      acceptedAsset = decoded.accepted.asset
+    }
+  } catch {
+    // Fall through to first-token fallback
+  }
+
+  const tokens = options.acceptedTokens || []
+
+  let matchedToken = tokens.find(t => {
+    const mint = typeof t.mint === 'string' ? t.mint : t.mint.toString()
+    return mint === acceptedAsset
+  })
+
+  // Fallback to first token if no match (e.g., Solana Pay flow)
+  if (!matchedToken && tokens.length > 0) {
+    matchedToken = tokens[0]
+  }
+
+  if (!matchedToken) {
+    throw new Error('No accepted tokens configured')
+  }
+
+  const mintStr = typeof matchedToken.mint === 'string' ? matchedToken.mint : matchedToken.mint.toString()
+
+  // Resolve amount for this specific token (supports async converters)
+  let tokenAmount = baseAmount
+  if (matchedToken.amount) {
+    if (typeof matchedToken.amount === 'function') {
+      const result = await matchedToken.amount(baseAmount)
+      tokenAmount = typeof result === 'number' ? result.toString() : result
+    } else {
+      tokenAmount = typeof matchedToken.amount === 'number'
+        ? matchedToken.amount.toString()
+        : matchedToken.amount
+    }
+  }
+
+  const routeConfig = {
+    amount: tokenAmount,
+    asset: { address: mintStr, decimals: matchedToken.decimals },
+    description: options.label || 'Payment',
+  }
+
+  return bridge.getX402Handler().createPaymentRequirements(routeConfig, resource) as Promise<PaymentRequirements>
 }
 
 /**

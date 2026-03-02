@@ -50,6 +50,12 @@ export class SolanaPayX402Bridge {
     facilitatorUrl?: string
     autoSettle: boolean
     splToken?: { mint: PublicKey; decimals: number }
+    acceptedTokens?: Array<{
+      mint: PublicKey
+      decimals: number
+      amount?: number | string | ((baseAmount: number | string) => number | string | Promise<number | string>)
+      label?: string
+    }>
     message?: string
   }
 
@@ -87,6 +93,25 @@ export class SolanaPayX402Bridge {
       }
     }
 
+    let acceptedTokensConfig: typeof this.config.acceptedTokens | undefined
+    if (config.acceptedTokens && config.acceptedTokens.length > 0) {
+      if (config.splToken) {
+        console.warn('[solana-pay-x402] Both splToken and acceptedTokens provided; acceptedTokens takes precedence.')
+      }
+      acceptedTokensConfig = config.acceptedTokens.map(token => {
+        const mintStr = typeof token.mint === 'string' ? token.mint : token.mint.toString()
+        if (!isValidSolanaAddress(mintStr)) {
+          throw new Error(`Invalid token mint address: ${mintStr}`)
+        }
+        return {
+          mint: new PublicKey(mintStr),
+          decimals: token.decimals,
+          amount: token.amount,
+          label: token.label,
+        }
+      })
+    }
+
     this.config = {
       recipient: recipientPubkey,
       network: config.network || 'mainnet-beta',
@@ -95,6 +120,7 @@ export class SolanaPayX402Bridge {
       facilitatorUrl: config.facilitatorUrl,
       autoSettle: config.autoSettle !== false,
       splToken: splTokenConfig,
+      acceptedTokens: acceptedTokensConfig,
       message: config.message,
     }
 
@@ -146,7 +172,11 @@ export class SolanaPayX402Bridge {
       ? new PublicKey(payment.reference)
       : Keypair.generate().publicKey
 
-    const decimals = this.config.splToken?.decimals ?? SOL_DECIMALS
+    // Use first accepted token (primary) or fall back to splToken / SOL
+    const primaryToken = this.config.acceptedTokens?.[0]
+    const decimals = primaryToken?.decimals ?? this.config.splToken?.decimals ?? SOL_DECIMALS
+    const splMint = primaryToken?.mint ?? this.config.splToken?.mint
+
     const rawAmount = typeof payment.amount === 'number'
       ? payment.amount
       : parseFloat(payment.amount)
@@ -162,8 +192,11 @@ export class SolanaPayX402Bridge {
       message: payment.memo || this.config.message,
     }
 
-    if (this.config.splToken) {
-      urlParams.splToken = this.config.splToken.mint
+    if (splMint) {
+      const mintStr = splMint.toString()
+      if (mintStr !== SOL_MINT) {
+        urlParams.splToken = splMint
+      }
     }
 
     const url = encodeURL(urlParams)
@@ -444,6 +477,95 @@ export class SolanaPayX402Bridge {
       })
       return null
     }
+  }
+
+  /**
+   * Check if multi-token mode is active.
+   */
+  isMultiToken(): boolean {
+    return !!(this.config.acceptedTokens && this.config.acceptedTokens.length > 0)
+  }
+
+  /**
+   * Create x402 payment requirements for multiple accepted tokens.
+   */
+  async createMultiTokenPaymentChallenge(
+    payment: PaymentRequest,
+    resource: string
+  ): Promise<{
+    paymentRequirements: PaymentRequirements[]
+    solanaPayUrl: SolanaPayUrl
+    resource: string
+  }> {
+    const tokens = this.getEffectiveTokens()
+    const baseAmount = typeof payment.amount === 'number'
+      ? payment.amount.toString()
+      : payment.amount
+
+    const requirementPromises = tokens.map(async (token) => {
+      const tokenAmount = await this.resolveTokenAmount(token, baseAmount)
+      const routeConfig = {
+        amount: tokenAmount,
+        asset: { address: token.mint.toString(), decimals: token.decimals },
+        description: payment.label || this.config.label,
+      }
+      return this.x402Handler.createPaymentRequirements(routeConfig, resource)
+    })
+
+    const paymentRequirements = await Promise.all(requirementPromises)
+    const solanaPayUrl = await this.createSolanaPayUrl(payment)
+
+    return { paymentRequirements, solanaPayUrl, resource }
+  }
+
+  /**
+   * Create 402 response with multiple accepted payment requirements.
+   */
+  create402ResponseMultiToken(
+    paymentRequirements: PaymentRequirements[],
+    resourceUrl: string
+  ): { status: 402; body: Record<string, unknown> } {
+    return {
+      status: 402,
+      body: {
+        x402Version: 2,
+        resource: {
+          url: resourceUrl,
+          description: (paymentRequirements[0]?.extra?.description as string) || '',
+          mimeType: 'application/json',
+        },
+        accepts: paymentRequirements,
+        error: 'Payment required',
+      },
+    }
+  }
+
+  private getEffectiveTokens(): Array<{
+    mint: PublicKey
+    decimals: number
+    amount?: number | string | ((baseAmount: number | string) => number | string | Promise<number | string>)
+  }> {
+    if (this.config.acceptedTokens && this.config.acceptedTokens.length > 0) {
+      return this.config.acceptedTokens
+    }
+    return [{
+      mint: this.config.splToken?.mint ?? new PublicKey(SOL_MINT),
+      decimals: this.config.splToken?.decimals ?? SOL_DECIMALS,
+    }]
+  }
+
+  private async resolveTokenAmount(
+    token: { amount?: number | string | ((baseAmount: number | string) => number | string | Promise<number | string>) },
+    baseAmount: string
+  ): Promise<string> {
+    if (!token.amount) {
+      return baseAmount
+    }
+    if (typeof token.amount === 'function') {
+      const result = await token.amount(baseAmount)
+      return typeof result === 'number' ? result.toString() : result
+    }
+    return typeof token.amount === 'number' ? token.amount.toString() : token.amount
   }
 
   getConnection(): Connection {

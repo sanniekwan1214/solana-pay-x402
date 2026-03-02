@@ -2,6 +2,7 @@ export { SolanaPayX402Bridge } from './core/bridge'
 export { InMemorySignatureStore } from './types'
 export type {
   SolanaPayX402Config,
+  AcceptedTokenConfig,
   PaymentRequest,
   SolanaPayUrl,
   PaymentVerification,

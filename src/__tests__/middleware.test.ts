@@ -217,6 +217,52 @@ describe('solanaPay402 middleware', () => {
     })
   })
 
+  describe('multi-token payment flow', () => {
+    const multiTokenOptions = {
+      ...baseOptions,
+      acceptedTokens: [
+        { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6, label: 'USDC' },
+        { mint: 'So11111111111111111111111111111111111111112', decimals: 9, label: 'SOL' },
+      ],
+    }
+
+    it('returns 402 with multiple accepts when acceptedTokens configured', async () => {
+      const middleware = solanaPay402(multiTokenOptions)
+
+      await middleware(mockReq as Request, mockRes as Response, mockNext)
+
+      expect(mockRes.status).toHaveBeenCalledWith(402)
+      expect(mockRes.json).toHaveBeenCalled()
+      const jsonCall = (mockRes.json as Mock).mock.calls[0][0]
+      expect(jsonCall.accepts).toBeDefined()
+      expect(jsonCall.solanaPay).toBeDefined()
+    })
+
+    it('verifies payment with correct token from v2 accepted field', async () => {
+      const paymentHeader = Buffer.from(JSON.stringify({
+        x402Version: 2,
+        resource: { url: 'http://localhost:3000/api/test' },
+        accepted: {
+          scheme: 'exact',
+          network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+          amount: '100000',
+          payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
+          maxTimeoutSeconds: 300,
+          asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+          extra: {},
+        },
+        payload: { transaction: 'base64-signed-tx' },
+      })).toString('base64')
+
+      mockReq.headers = { 'payment-signature': paymentHeader }
+
+      const middleware = solanaPay402(multiTokenOptions)
+      await middleware(mockReq as Request, mockRes as Response, mockNext)
+
+      expect(mockNext).toHaveBeenCalled()
+    })
+  })
+
   describe('error handling', () => {
     it('returns 500 on unexpected error', async () => {
       const middleware = solanaPay402({

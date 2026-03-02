@@ -53,6 +53,21 @@ export interface SplTokenConfig {
 }
 
 /**
+ * Configuration for a single accepted token with its price
+ */
+export interface AcceptedTokenConfig {
+  /** Token mint address */
+  mint: string | PublicKey
+  /** Token decimals */
+  decimals: number
+  /** Fixed amount in atomic units, or converter: (baseAmount) => tokenAmount.
+   *  The converter can be async (e.g. to fetch live exchange rates). */
+  amount?: number | string | ((baseAmount: number | string) => number | string | Promise<number | string>)
+  /** Human label, e.g. "USDC", "SOL" */
+  label?: string
+}
+
+/**
  * Configuration for Solana Pay x402 integration
  */
 export interface SolanaPayX402Config {
@@ -74,6 +89,9 @@ export interface SolanaPayX402Config {
   autoSettle?: boolean
   /** Signature store for replay attack prevention */
   signatureStore?: SignatureStore
+  /** Accept multiple tokens. First entry is primary (used for Solana Pay QR).
+   *  Takes precedence over splToken when set. */
+  acceptedTokens?: AcceptedTokenConfig[]
 }
 
 /**

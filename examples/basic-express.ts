@@ -76,6 +76,45 @@ app.get(
   }
 )
 
+// Multi-token pricing: accept USDC or SOL for the same endpoint
+// The amount converter can be async — fetch live exchange rates
+const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+const SOL_MINT = 'So11111111111111111111111111111111111111112'
+
+async function usdcToSol(baseAmount: number | string): Promise<string> {
+  // Fetch live SOL price from Jupiter (or your preferred oracle)
+  const resp = await fetch(`https://api.jup.ag/price/v2?ids=${SOL_MINT}`)
+  const data = await resp.json()
+  const solPrice = parseFloat(data.data?.[SOL_MINT]?.price) || 150
+  const usdcDisplay = Number(baseAmount) / 1e6
+  return Math.round((usdcDisplay / solPrice) * 1e9).toString()
+}
+
+app.get(
+  '/api/multi-token',
+  solanaPay402({
+    rpcUrl: process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
+    recipient: process.env.MERCHANT_WALLET || 'YOUR_WALLET_ADDRESS_HERE',
+    network: 'devnet',
+    label: 'Multi-Token API',
+    acceptedTokens: [
+      { mint: USDC_MINT, decimals: 6, label: 'USDC' },                        // base price
+      { mint: SOL_MINT, decimals: 9, amount: usdcToSol, label: 'SOL' },       // live rate
+    ],
+    getPaymentAmount: () => 100000, // 0.10 USDC
+  }),
+  (req, res) => {
+    const payment = getPaymentInfo(req)
+    res.json({
+      message: 'Paid with your choice of token!',
+      payment: {
+        signature: payment?.signature,
+        amount: payment?.amount,
+      },
+    })
+  }
+)
+
 app.get('/api/free-data', (req, res) => {
   res.json({
     message: 'Free endpoint',

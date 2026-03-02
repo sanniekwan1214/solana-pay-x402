@@ -113,6 +113,79 @@ app.get('/api/data/:tier',
   }
 )
 
+// Multi-token endpoint: accepts both USDC and SOL (live rate from Jupiter)
+const SOL_MINT = 'So11111111111111111111111111111111111111112'
+const SOL_DECIMALS = 9
+const JUPITER_PRICE_API = 'https://api.jup.ag/price/v2'
+
+// Cache SOL price for 30 seconds
+let solPriceCache: { price: number; timestamp: number } | null = null
+
+async function getSolPriceUSD(): Promise<number> {
+  if (solPriceCache && Date.now() - solPriceCache.timestamp < 30_000) {
+    return solPriceCache.price
+  }
+  try {
+    const resp = await fetch(`${JUPITER_PRICE_API}?ids=${SOL_MINT}`)
+    const data = await resp.json()
+    const price = parseFloat(data.data?.[SOL_MINT]?.price)
+    if (price && !isNaN(price)) {
+      solPriceCache = { price, timestamp: Date.now() }
+      log('price', `SOL price: $${price.toFixed(2)} (Jupiter)`)
+      return price
+    }
+  } catch (err) {
+    log('price', `Jupiter fetch failed: ${(err as Error).message}`)
+  }
+  // Fallback to cached or a safe default
+  return solPriceCache?.price ?? 150
+}
+
+/**
+ * Convert USDC atomic amount to SOL atomic amount using live rate.
+ * USDC has 6 decimals, SOL has 9 decimals.
+ */
+async function usdcToSol(baseAmount: number | string): Promise<string> {
+  const usdcAtomic = Number(baseAmount)
+  const usdcDisplay = usdcAtomic / 1e6             // e.g. 0.00001
+  const solPrice = await getSolPriceUSD()
+  const solDisplay = usdcDisplay / solPrice          // e.g. 0.00001 / 150 = 6.67e-8
+  const solAtomic = Math.round(solDisplay * 1e9)     // convert to lamports
+  return solAtomic.toString()
+}
+
+app.get('/api/multi-token',
+  solanaPay402({
+    rpcUrl: RPC_URL,
+    recipient: MERCHANT_WALLET,
+    network: NETWORK,
+    label: 'Multi-Token Access',
+    autoSettle: true,
+    acceptedTokens: [
+      { mint: USDC_MINT, decimals: USDC_DECIMALS, label: 'USDC' },
+      { mint: SOL_MINT, decimals: SOL_DECIMALS, amount: usdcToSol, label: 'SOL' },
+    ],
+    getPaymentAmount: () => pricing.content,
+    onPaymentVerified: (req, verification) => {
+      log('payment', 'multi-token verified', {
+        endpoint: req.path,
+        signature: verification.signature,
+        amount: verification.amount,
+      })
+    },
+    onPaymentFailed: (req, error) => {
+      log('payment', 'multi-token failed', { endpoint: req.path, error })
+    },
+  }),
+  (_req: Request, res: Response) => {
+    const payment = getPaymentInfo(_req)
+    res.json({
+      data: { id: 2, type: 'multi-token', content: 'Paid with your choice of token!' },
+      payment: { sig: payment?.signature, amount: payment?.amount },
+    })
+  }
+)
+
 // RPC proxy — browser can't call public Solana RPC directly (CORS blocked)
 app.post('/rpc', async (req: Request, res: Response) => {
   try {
@@ -139,5 +212,6 @@ app.listen(PORT, () => {
   console.log(`  GET /api/data/basic      $${(pricing.basic / 1e6).toFixed(5)} USDC`)
   console.log(`  GET /api/data/premium    $${(pricing.premium / 1e6).toFixed(4)} USDC`)
   console.log(`  GET /api/data/enterprise $${(pricing.enterprise / 1e6).toFixed(4)} USDC`)
+  console.log(`  GET /api/multi-token     $${(pricing.content / 1e6).toFixed(5)} USDC or SOL (live rate)`)
   console.log(`  GET /api/health          free\n`)
 })

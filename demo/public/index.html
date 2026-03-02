@@ -93,6 +93,37 @@
     .endpoint.selected { border-color: #58a6ff; background: #1c2128; }
     .endpoint-path { color: #58a6ff; }
     .endpoint-price { color: #7ee787; font-weight: 500; }
+    .endpoint.multi-token { border-style: dashed; }
+
+    /* Token selector */
+    .token-selector {
+      display: none;
+      margin-bottom: 12px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 12px;
+    }
+    .token-selector.active { display: block; }
+    .token-selector .section-title { margin-bottom: 8px; }
+    .token-options { display: flex; gap: 8px; }
+    .token-opt {
+      flex: 1;
+      padding: 10px;
+      background: #0d1117;
+      border: 2px solid #30363d;
+      border-radius: 6px;
+      cursor: pointer;
+      text-align: center;
+      font-family: inherit;
+      font-size: 12px;
+      color: #c9d1d9;
+      transition: border-color 0.15s;
+    }
+    .token-opt:hover { border-color: #58a6ff; }
+    .token-opt.selected { border-color: #d2a8ff; background: #1c1230; }
+    .token-opt .token-name { font-weight: 600; color: #d2a8ff; }
+    .token-opt .token-amount { color: #8b949e; font-size: 11px; margin-top: 4px; }
 
     /* Buttons */
     .btn {
@@ -311,6 +342,10 @@
           <span class="endpoint-path">GET /api/data/enterprise</span>
           <span class="endpoint-price">$0.0005 USDC</span>
         </div>
+        <div class="endpoint multi-token" onclick="selectEndpoint('/api/multi-token', 10, 'USDC or SOL')">
+          <span class="endpoint-path">GET /api/multi-token</span>
+          <span class="endpoint-price" style="color:#d2a8ff;">USDC or SOL</span>
+        </div>
       </div>
     </div>
 
@@ -322,6 +357,11 @@
           <span class="wallet-bal" id="walletBalance"></span>
         </div>
         <button class="btn btn-phantom" style="width:auto; padding:6px 16px;" onclick="connectWallet()" id="connectBtn">Connect Phantom</button>
+      </div>
+
+      <div class="token-selector" id="tokenSelector">
+        <div class="section-title">Choose Token</div>
+        <div class="token-options" id="tokenOptions"></div>
       </div>
 
       <button class="btn" id="x402PayBtn" onclick="x402Pay()" disabled>Select endpoint</button>
@@ -392,6 +432,7 @@
     let phantomProvider = null
     let connection = null
     let paymentData402 = null
+    let selectedTokenIndex = 0   // which accepts[] entry to use
 
     const $ = id => document.getElementById(id)
 
@@ -429,10 +470,12 @@
     // ===== Endpoint Selection =====
     function selectEndpoint(path, units, priceDisplay) {
       selectedEndpoint = { path, units, priceDisplay }
+      selectedTokenIndex = 0
       document.querySelectorAll('.endpoint').forEach(e => e.classList.remove('selected'))
       event.currentTarget.classList.add('selected')
       $('result').classList.remove('active', 'success', 'error')
       $('spPayPanel').classList.remove('active')
+      $('tokenSelector').classList.remove('active')
       resetSteps()
       updateButtons()
       log('info', `Selected: ${path} (${priceDisplay})`)
@@ -558,8 +601,16 @@
         // Step 2: Parse payment requirements
         updateStep(2, 'active')
         const accepts = paymentData402.accepts || []
-        const req = accepts.find(r => r.scheme === 'exact' && (r.network || '').startsWith('solana'))
-        if (!req) throw new Error('No Solana payment requirements in 402 response')
+        const solanaAccepts = accepts.filter(r => r.scheme === 'exact' && (r.network || '').startsWith('solana'))
+        if (solanaAccepts.length === 0) throw new Error('No Solana payment requirements in 402 response')
+
+        // Multi-token: let user choose if there are multiple options
+        if (solanaAccepts.length > 1) {
+          await showTokenSelector(solanaAccepts)
+          log('info', `[x402] User selected token: ${solanaAccepts[selectedTokenIndex].asset.slice(0,8)}...`)
+        }
+
+        const req = solanaAccepts[selectedTokenIndex]
 
         const feePayer = req.extra?.feePayer
         if (!feePayer) throw new Error('Missing facilitator feePayer in payment requirements')
@@ -663,6 +714,48 @@
           }
         }
       }
+    }
+
+    // ===== Token Selector (multi-token) =====
+    const KNOWN_TOKENS = {
+      'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': { name: 'USDC', decimals: 6 },
+      'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': { name: 'USDT', decimals: 6 },
+      'So11111111111111111111111111111111111111112':    { name: 'SOL',  decimals: 9 },
+    }
+
+    function showTokenSelector(solanaAccepts) {
+      return new Promise(resolve => {
+        const container = $('tokenOptions')
+        container.innerHTML = ''
+
+        solanaAccepts.forEach((req, i) => {
+          const info = KNOWN_TOKENS[req.asset] || { name: req.asset.slice(0, 6) + '...', decimals: 6 }
+          const displayAmount = (Number(req.amount) / Math.pow(10, info.decimals)).toFixed(info.decimals > 6 ? 6 : info.decimals)
+
+          const opt = document.createElement('button')
+          opt.className = `token-opt${i === 0 ? ' selected' : ''}`
+          opt.innerHTML = `<div class="token-name">${info.name}</div><div class="token-amount">${displayAmount} ${info.name}</div>`
+          opt.onclick = () => {
+            selectedTokenIndex = i
+            container.querySelectorAll('.token-opt').forEach(o => o.classList.remove('selected'))
+            opt.classList.add('selected')
+          }
+          container.appendChild(opt)
+        })
+
+        // Add confirm button
+        const confirm = document.createElement('button')
+        confirm.className = 'btn'
+        confirm.style.marginTop = '10px'
+        confirm.textContent = 'Confirm Token'
+        confirm.onclick = () => {
+          $('tokenSelector').classList.remove('active')
+          resolve()
+        }
+        container.appendChild(confirm)
+
+        $('tokenSelector').classList.add('active')
+      })
     }
 
     // ===== Solana Pay Flow =====

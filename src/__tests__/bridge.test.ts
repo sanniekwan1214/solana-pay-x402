@@ -313,4 +313,115 @@ describe('SolanaPayX402Bridge', () => {
       expect(handler).toBeDefined()
     })
   })
+
+  describe('multi-token configuration', () => {
+    it('creates bridge with acceptedTokens config', () => {
+      const bridge = new SolanaPayX402Bridge({
+        ...validConfig,
+        acceptedTokens: [
+          { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6, label: 'USDC' },
+          { mint: 'So11111111111111111111111111111111111111112', decimals: 9, label: 'SOL' },
+        ],
+      })
+      expect(bridge).toBeDefined()
+      expect(bridge.isMultiToken()).toBe(true)
+    })
+
+    it('isMultiToken returns false for single-token config', () => {
+      const bridge = new SolanaPayX402Bridge(validConfig)
+      expect(bridge.isMultiToken()).toBe(false)
+    })
+
+    it('throws for invalid mint in acceptedTokens', () => {
+      expect(() => new SolanaPayX402Bridge({
+        ...validConfig,
+        acceptedTokens: [
+          { mint: 'invalid-mint', decimals: 6 },
+        ],
+      })).toThrow('Invalid token mint address')
+    })
+
+    it('warns when both splToken and acceptedTokens provided', () => {
+      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      new SolanaPayX402Bridge({
+        ...validConfig,
+        splToken: { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6 },
+        acceptedTokens: [
+          { mint: 'So11111111111111111111111111111111111111112', decimals: 9 },
+        ],
+      })
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining('acceptedTokens takes precedence'))
+      spy.mockRestore()
+    })
+  })
+
+  describe('createMultiTokenPaymentChallenge', () => {
+    it('returns array of payment requirements, one per token', async () => {
+      const bridge = new SolanaPayX402Bridge({
+        ...validConfig,
+        acceptedTokens: [
+          { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6, label: 'USDC' },
+          { mint: 'So11111111111111111111111111111111111111112', decimals: 9, label: 'SOL' },
+        ],
+      })
+
+      const result = await bridge.createMultiTokenPaymentChallenge(
+        { amount: 100000 },
+        'http://localhost:3000/api/test'
+      )
+
+      expect(result.paymentRequirements).toHaveLength(2)
+      expect(result.solanaPayUrl).toBeDefined()
+      expect(result.resource).toBe('http://localhost:3000/api/test')
+    })
+
+    it('calls createPaymentRequirements once per token', async () => {
+      const bridge = new SolanaPayX402Bridge({
+        ...validConfig,
+        acceptedTokens: [
+          { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6, amount: '100000' },
+          { mint: 'So11111111111111111111111111111111111111112', decimals: 9, amount: (base) => Number(base) * 150 },
+        ],
+      })
+
+      await bridge.createMultiTokenPaymentChallenge(
+        { amount: 1000 },
+        'http://localhost:3000/api/test'
+      )
+
+      const handler = bridge.getX402Handler()
+      expect(handler.createPaymentRequirements).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('create402ResponseMultiToken', () => {
+    it('creates response with multiple accepts entries', () => {
+      const bridge = new SolanaPayX402Bridge(validConfig)
+      const requirements = [
+        {
+          scheme: 'exact',
+          network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+          amount: '100000',
+          payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
+          maxTimeoutSeconds: 300,
+          asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+          extra: {},
+        },
+        {
+          scheme: 'exact',
+          network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+          amount: '15000000',
+          payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
+          maxTimeoutSeconds: 300,
+          asset: 'So11111111111111111111111111111111111111112',
+          extra: {},
+        },
+      ]
+
+      const result = bridge.create402ResponseMultiToken(requirements, 'http://localhost:3000/api/test')
+      expect(result.status).toBe(402)
+      expect((result.body as { accepts: unknown[] }).accepts).toHaveLength(2)
+      expect((result.body as { x402Version: number }).x402Version).toBe(2)
+    })
+  })
 })
