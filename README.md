@@ -2,10 +2,10 @@
 
 Middleware that puts any API endpoint behind a Solana payment. Works with Express and Next.js. Drop it into a route and your endpoint returns `402 Payment Required` until the client pays.
 
-Two payment flows, one middleware — the server figures out which one the client is using:
+Two independent payment flows, one middleware — the server figures out which one the client is using:
 
-- **x402 v2**: Client signs a transaction, facilitator submits it and pays gas. Good for dApps, APIs, and anything programmatic.
-- **Solana Pay**: Client scans a QR code with a mobile wallet, pays on-chain directly. Good for mobile, retail, POS.
+- **x402 v2**: Client signs a transaction, facilitator submits it and pays gas. Verified via x402 facilitator. Good for dApps, APIs, and anything programmatic.
+- **Solana Pay**: Client scans a QR code with a mobile wallet, pays on-chain directly. Verified on-chain via RPC. Good for mobile, retail, POS.
 
 ## Quick Start
 
