@@ -1,6 +1,6 @@
 {
   "name": "solana-pay-x402",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "HTTP 402 payment middleware for Solana (Express + Next.js). Supports x402 v2 (programmatic, facilitator-managed) and Solana Pay (QR code, on-chain) from a single integration.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

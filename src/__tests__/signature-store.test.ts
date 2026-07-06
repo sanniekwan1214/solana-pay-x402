@@ -73,6 +73,47 @@ describe('InMemorySignatureStore', () => {
     })
   })
 
+  describe('addIfAbsent', () => {
+    it('returns true and stores the signature when absent', () => {
+      expect(store.addIfAbsent('fresh-sig')).toBe(true)
+      expect(store.has('fresh-sig')).toBe(true)
+    })
+
+    it('returns false when the signature is already present', () => {
+      store.add('taken-sig')
+      expect(store.addIfAbsent('taken-sig')).toBe(false)
+    })
+
+    it('only lets one of two claims for the same signature succeed', () => {
+      const first = store.addIfAbsent('contested-sig')
+      const second = store.addIfAbsent('contested-sig')
+      expect(first).toBe(true)
+      expect(second).toBe(false)
+    })
+
+    it('respects TTL like add', () => {
+      store.addIfAbsent('short-claim', 500)
+      vi.advanceTimersByTime(1500)
+      expect(store.has('short-claim')).toBe(false)
+    })
+  })
+
+  describe('delete', () => {
+    it('removes a stored signature so it can be claimed again', () => {
+      store.add('to-release')
+      expect(store.has('to-release')).toBe(true)
+
+      store.delete('to-release')
+
+      expect(store.has('to-release')).toBe(false)
+      expect(store.addIfAbsent('to-release')).toBe(true)
+    })
+
+    it('is a no-op for unknown signatures', () => {
+      expect(() => store.delete('never-added')).not.toThrow()
+    })
+  })
+
   describe('destroy', () => {
     it('stops cleanup interval', () => {
       const clearIntervalSpy = vi.spyOn(global, 'clearInterval')
