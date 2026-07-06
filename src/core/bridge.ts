@@ -1,4 +1,5 @@
-import { Connection, PublicKey, Keypair } from '@solana/web3.js'
+import { createHash } from 'crypto'
+import { Connection, PublicKey, Keypair, VersionedTransaction, Transaction } from '@solana/web3.js'
 import { encodeURL } from '@solana/pay'
 import BigNumber from 'bignumber.js'
 import { X402PaymentHandler } from 'x402-solana/server'
@@ -9,6 +10,7 @@ import type {
   SolanaPayUrl,
   PaymentVerification,
   SignatureStore,
+  SettlementResult,
 } from '../types'
 import { InMemorySignatureStore } from '../types'
 
@@ -223,6 +225,91 @@ export class SolanaPayX402Bridge {
   }
 
   /**
+   * Derive a replay-protection key for a v2 x402 payload.
+   *
+   * The x402 v2 facilitator flow has no pre-existing on-chain signature to key off of
+   * (unlike Solana Pay), so we derive one from the signed-but-unsubmitted transaction.
+   * The key must come from a signature the CLIENT actually produced: in the x402 flow
+   * the fee payer is the facilitator, whose signature slot is an all-zero placeholder
+   * until settle time, so slot 0 is the same for every payment from every user. We
+   * therefore take the first NON-ZERO signature (the payer's — unforgeable per
+   * transaction), falling back to hashing the raw payment header if the transaction
+   * can't be parsed or carries no real signature.
+   */
+  private getV2ReplayKey(paymentHeader: string, decoded: Record<string, unknown>): string {
+    try {
+      const payload = decoded.payload as Record<string, unknown> | undefined
+      const txBase64 = payload?.transaction as string | undefined
+      if (txBase64) {
+        const buf = Buffer.from(txBase64, 'base64')
+        let allSigs: Array<Uint8Array | null>
+        try {
+          const versionedTx = VersionedTransaction.deserialize(buf)
+          allSigs = versionedTx.signatures
+        } catch {
+          const legacyTx = Transaction.from(buf)
+          allSigs = legacyTx.signatures.map((s) => s.signature)
+        }
+        // Skip unsigned placeholder slots (all zeros) — e.g. the facilitator fee payer.
+        const sigBytes = allSigs.find((s) => s && s.length > 0 && s.some((b) => b !== 0))
+        if (sigBytes) {
+          return 'x402v2:' + Buffer.from(sigBytes).toString('base64')
+        }
+      }
+    } catch {
+      // Fall through to hash fallback below
+    }
+    return 'x402v2:' + createHash('sha256').update(paymentHeader).digest('hex')
+  }
+
+  /**
+   * Atomically claim a replay key. Returns false if the key was already used.
+   * Prefers the store's atomic addIfAbsent; falls back to non-atomic has()+add()
+   * for stores that don't implement it.
+   */
+  private async claimReplayKey(key: string): Promise<boolean> {
+    if (this.signatureStore.addIfAbsent) {
+      return this.signatureStore.addIfAbsent(key)
+    }
+    const alreadyUsed = await this.signatureStore.has(key)
+    if (alreadyUsed) {
+      return false
+    }
+    await this.signatureStore.add(key)
+    return true
+  }
+
+  /**
+   * Release a previously claimed replay key (best effort — requires the store to
+   * implement delete). Used when verification or blocking settlement fails, so the
+   * client can retry the identical signed transaction instead of being locked out.
+   */
+  private async releaseReplayKey(key: string): Promise<void> {
+    if (this.signatureStore.delete) {
+      await this.signatureStore.delete(key)
+    }
+  }
+
+  /**
+   * Release the replay claim for a v2 payment header whose blocking settlement failed.
+   * No funds moved and no content was served, so the same signed transaction must stay
+   * retryable — resubmitting the identical transaction is idempotent on-chain, whereas
+   * forcing the client to re-sign a fresh one risks double payment if the original
+   * settle actually broadcast before erroring. No-op for Solana Pay payloads (their
+   * funds already moved at verify time) and for stores without delete support.
+   */
+  async releaseReplayProtection(paymentHeader: string): Promise<void> {
+    try {
+      const decoded = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'))
+      if ('x402Version' in decoded && decoded.x402Version === 2) {
+        await this.releaseReplayKey(this.getV2ReplayKey(paymentHeader, decoded))
+      }
+    } catch {
+      // Nothing to release for undecodable headers
+    }
+  }
+
+  /**
    * Verify payment using x402 facilitator with fallback to on-chain
    * paymentHeader should be raw base64 string from extractPayment
    */
@@ -271,11 +358,25 @@ export class SolanaPayX402Bridge {
     try {
       // v2 x402 payload: use facilitator (the proper x402 flow)
       if (isV2Payload) {
-        try {
-          debugLog('verify', 'v2 payload detected, using facilitator verification', {
-            x402Version: decoded.x402Version,
-          })
+        debugLog('verify', 'v2 payload detected, using facilitator verification', {
+          x402Version: decoded.x402Version,
+        })
 
+        // Claim the replay key BEFORE the facilitator round trip. A non-atomic
+        // check-then-add here would let N concurrent requests with the same header
+        // all pass the replay check while the (slow) facilitator call is in flight.
+        const replayKey = this.getV2ReplayKey(paymentHeader, decoded)
+        const claimed = await this.claimReplayKey(replayKey)
+        if (!claimed) {
+          debugLog('verify', 'v2 payload replay detected', { replayKey })
+          return {
+            valid: false,
+            signature: '',
+            error: 'Payment signature already used',
+          }
+        }
+
+        try {
           const verified = await this.x402Handler.verifyPayment(paymentHeader, paymentRequirements)
 
           debugLog('verify', 'Facilitator response received', {
@@ -291,12 +392,16 @@ export class SolanaPayX402Bridge {
             }
           }
 
+          // Verification failed — no funds moved, so release the claim to keep the
+          // header retryable (e.g. after a transient facilitator rejection).
+          await this.releaseReplayKey(replayKey)
           return {
             valid: false,
             signature: '',
             error: verified?.invalidReason || 'Facilitator verification failed',
           }
         } catch (err) {
+          await this.releaseReplayKey(replayKey)
           debugLog('verify', 'Facilitator verification failed', {
             error: err instanceof Error ? err.message : String(err),
           })
@@ -436,28 +541,33 @@ export class SolanaPayX402Bridge {
   /**
    * Settle payment through facilitator.
    *
-   * v2 x402 flow: facilitator submits the signed transaction and settles.
-   * Solana Pay flow: transaction is already on-chain, settlement is a no-op.
+   * v2 x402 flow: facilitator submits the signed transaction and settles — this is where
+   * funds actually move, so the caller (middleware) should await this and treat a
+   * 'failed' result as a hard failure rather than letting the protected handler run.
+   * Solana Pay flow: transaction is already on-chain, settlement is a no-op that reports
+   * the existing signature as already-settled.
    */
   async settlePayment(
     paymentHeader: string,
     paymentRequirements: PaymentRequirements
-  ): Promise<string | null> {
+  ): Promise<SettlementResult> {
     if (!this.config.autoSettle) {
       debugLog('settle', 'Auto-settle disabled, skipping')
-      return null
+      return { status: 'skipped' }
     }
 
     // Detect payload type — skip facilitator for Solana Pay (v1-style) payloads
+    let decoded: Record<string, unknown>
     try {
-      const decoded = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'))
-      if (!('x402Version' in decoded) || decoded.x402Version !== 2) {
-        // Solana Pay flow: tx already submitted on-chain, no facilitator settlement needed
-        debugLog('settle', 'Solana Pay flow detected, tx already on-chain, skipping facilitator')
-        return (decoded.signature as string) || null
-      }
+      decoded = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'))
     } catch {
-      return null
+      return { status: 'failed', error: 'Invalid payment header format' }
+    }
+
+    if (!('x402Version' in decoded) || decoded.x402Version !== 2) {
+      // Solana Pay flow: tx already submitted on-chain, no facilitator settlement needed
+      debugLog('settle', 'Solana Pay flow detected, tx already on-chain, skipping facilitator')
+      return { status: 'settled', signature: (decoded.signature as string) || null }
     }
 
     // v2 x402 flow: facilitator submits and settles the transaction
@@ -470,12 +580,19 @@ export class SolanaPayX402Bridge {
         result: settlement as Record<string, unknown>,
       })
 
-      return settlement?.transaction ?? null
+      if (settlement?.success) {
+        return { status: 'settled', signature: settlement.transaction || null }
+      }
+
+      return {
+        status: 'failed',
+        error: settlement?.errorReason || settlement?.errorMessage || 'Settlement failed',
+      }
     } catch (err) {
       debugLog('settle', 'Facilitator settlement failed', {
         error: err instanceof Error ? err.message : String(err),
       })
-      return null
+      return { status: 'failed', error: err instanceof Error ? err.message : 'Settlement failed' }
     }
   }
 

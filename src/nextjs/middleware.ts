@@ -11,8 +11,20 @@ export interface NextJsMiddlewareOptions extends SolanaPayX402Config {
   getPaymentAmount: (req: Request) => number | string | null | Promise<number | string | null>
   getPaymentMetadata?: (req: Request) => Record<string, unknown> | Promise<Record<string, unknown>>
   getReference?: (req: Request) => string | Promise<string>
+  /**
+   * Called after successful payment verification — BEFORE settlement. In the x402 v2
+   * flow funds have not moved yet at this point, so use it for logging/metrics only;
+   * treat the protected handler running (blocking mode) or a populated
+   * `settlementSignature` as the "actually paid" signal.
+   */
   onPaymentVerified?: (req: Request, verification: PaymentVerification) => void | Promise<void>
   onPaymentFailed?: (req: Request, error: string) => void | Promise<void>
+  /**
+   * Called when facilitator settlement (x402 v2 flow) fails, either in blocking mode
+   * (before the 402 settlement-failure response is sent) or in async mode (after the
+   * handler has already run).
+   */
+  onSettlementFailed?: (req: Request, error: string) => void | Promise<void>
 }
 
 export interface PaymentContext {
@@ -188,10 +200,45 @@ async function handlePaymentVerification(
     await options.onPaymentVerified(req, verification)
   }
 
-  // Settlement is non-blocking
-  bridge.settlePayment(paymentHeader, paymentRequirements).then((sig) => {
-    if (sig) verification.settlementSignature = sig
-  }).catch(() => {})
+  if (options.settlementMode === 'async') {
+    // Fire-and-forget settlement (legacy behavior) - don't delay the response.
+    // Still observable via onSettlementFailed; errors are swallowed here so nothing
+    // rejects unhandled.
+    void bridge.settlePayment(paymentHeader, paymentRequirements)
+      .then(async (settlement) => {
+        if (settlement.status === 'settled') {
+          if (settlement.signature) verification.settlementSignature = settlement.signature
+        } else if (settlement.status === 'failed' && options.onSettlementFailed) {
+          await options.onSettlementFailed(req, settlement.error)
+        }
+      })
+      .catch(() => {})
+
+    return handler(req, { payment: verification })
+  }
+
+  // Blocking (default): await facilitator settlement before running the protected handler,
+  // so a settlement failure never leaves content served without funds having moved.
+  const settlement = await bridge.settlePayment(paymentHeader, paymentRequirements)
+
+  if (settlement.status === 'failed') {
+    // No funds moved and no content served — release the replay claim so the client
+    // can retry the identical signed transaction (the only double-payment-safe retry).
+    await bridge.releaseReplayProtection(paymentHeader)
+
+    if (options.onSettlementFailed) {
+      await options.onSettlementFailed(req, settlement.error)
+    }
+
+    return Response.json(
+      { error: 'Payment settlement failed', message: settlement.error },
+      { status: 402 }
+    )
+  }
+
+  if (settlement.status === 'settled' && settlement.signature) {
+    verification.settlementSignature = settlement.signature
+  }
 
   return handler(req, { payment: verification })
 }

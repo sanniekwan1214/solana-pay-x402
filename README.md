@@ -55,7 +55,7 @@ export const GET = withSolanaPay402(async (req, { payment }) => {
 })
 ```
 
-That's it. The middleware handles the 402 response, payment verification, and settlement.
+That's it. The middleware handles the 402 response, payment verification, and settlement — by default it *awaits* facilitator settlement (x402 v2 flow) before your handler ever runs, so a settlement failure never lets a request through unpaid. See [Settlement modes](#settlement-modes) below to opt back into fire-and-forget settlement.
 
 ## How It Works
 
@@ -69,12 +69,16 @@ Client                    Server                   Facilitator
   | (build tx, sign with wallet, don't submit)          |
   |                          |                          |
   |-- GET /api/premium ----->|                          |
-  |   + PAYMENT-SIGNATURE    |-- verify + settle ------>|
-  |                          |<---- ok, tx submitted ---|
+  |   + PAYMENT-SIGNATURE    |-- verify ---------------->|
+  |                          |<---- isValid -------------|
+  |                          |-- settle (awaited) ------>|
+  |                          |<---- ok, tx submitted ----|
   |<---- 200 + content ------|                          |
 ```
 
-The client signs a transaction but never submits it. The facilitator submits it, verifies payment, and covers gas fees. This is the x402 protocol — the client just uses `createX402Client` from `x402-solana/client` and it handles everything behind a `fetch()` call.
+The client signs a transaction but never submits it. The facilitator verifies the payment, then submits and settles it. This is the x402 protocol — the client just uses `createX402Client` from `x402-solana/client` and it handles everything behind a `fetch()` call.
+
+By default the middleware **awaits** the settlement step before running your handler (`settlementMode: 'blocking'`, the default since 0.2.0). If settlement fails, the request gets a `402` instead of your handler ever running — see [Settlement modes](#settlement-modes).
 
 ### Solana Pay Flow (QR Code)
 
@@ -133,6 +137,7 @@ solanaPay402({
   label: 'My API',                      // shown in wallet
   message: 'Thanks for paying',         // memo field
   autoSettle: true,                     // default: true
+  settlementMode: 'blocking',           // default: 'blocking' (see Settlement modes below)
   facilitatorUrl: 'https://...',        // default: PayAI Network
 
   // SPL token (defaults to native SOL)
@@ -147,6 +152,9 @@ solanaPay402({
   },
   onPaymentFailed: (req, error) => {
     console.error('Failed:', error)
+  },
+  onSettlementFailed: (req, error) => {
+    console.error('Settlement failed:', error)
   },
 })
 ```
@@ -179,6 +187,31 @@ export const GET = withSolanaPay402(async (req, { payment }) => {
   return Response.json({ data: 'content' })
 }, options)
 ```
+
+### Settlement modes
+
+The x402 v2 flow has two steps: **verify** (facilitator confirms the signed transaction is valid — no funds move yet) and **settle** (facilitator submits the transaction — funds move here). Since 0.2.0, the middleware awaits settlement by default:
+
+- **`settlementMode: 'blocking'`** (default) — the middleware awaits facilitator settlement before running your handler. If settlement fails, the client gets a `402` (`{ error: 'Payment settlement failed', message }`) and your handler never runs, so served content and moved funds stay in sync.
+- **`settlementMode: 'async'`** — restores the pre-0.2.0 fire-and-forget behavior: your handler runs immediately after verification, and settlement happens in the background. Use this only if your endpoint can tolerate serving content before settlement is confirmed. Failures are only observable via `onSettlementFailed`.
+
+```typescript
+solanaPay402({
+  // ...
+  settlementMode: 'async', // opt back into fire-and-forget settlement
+  onSettlementFailed: (req, error) => {
+    // Only fires in 'blocking' mode before the 402 response, or in 'async' mode
+    // after the handler has already run (best-effort observability).
+    console.error('Settlement failed:', error)
+  },
+})
+```
+
+x402 v2 payloads also get replay protection as of 0.2.0: each signed-but-unsettled transaction is tracked in the same `signatureStore` used for Solana Pay, keyed off the **payer's** signature — the fee payer in the x402 flow is the facilitator, whose signature slot is empty until settle time, so it is skipped (falling back to a hash of the payment header if the transaction can't be parsed). The key is claimed atomically before verification, so concurrent requests carrying the same header are rejected, and it is released again if verification or blocking settlement fails — retrying the identical signed transaction after a transient facilitator error is safe and supported (it's also the only retry that can't double-charge the payer).
+
+If you supply a custom `signatureStore`, implement the optional `addIfAbsent(signature, ttlMs)` (atomic check-and-set, e.g. Redis `SET NX`) and `delete(signature)` methods: without `addIfAbsent` the replay check falls back to a non-atomic `has()`+`add()`, and without `delete` a failed settlement permanently burns the payment header for the TTL. The built-in `InMemorySignatureStore` implements both.
+
+Two more notes on 0.2.0: `onPaymentVerified` fires after verification but **before** settlement — funds have not moved yet in the v2 flow, so use it for logging, not for granting access (the protected handler running is the paid signal). And for direct `SolanaPayX402Bridge` users, `settlePayment()` now returns a `SettlementResult` object (`{ status: 'settled' | 'skipped' | 'failed', ... }`) instead of `string | null`.
 
 ## Examples
 

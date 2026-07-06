@@ -9,6 +9,7 @@ export type {
   SignatureStore,
   SplTokenConfig,
   PaymentRequirements,
+  SettlementResult,
 } from './types'
 
 // Framework-specific exports are available via subpath imports:

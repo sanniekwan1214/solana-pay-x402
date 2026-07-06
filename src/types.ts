@@ -6,6 +6,21 @@ import { PublicKey } from '@solana/web3.js'
 export interface SignatureStore {
   has(signature: string): Promise<boolean> | boolean
   add(signature: string, ttlMs?: number): Promise<void> | void
+  /**
+   * Atomically add the signature only if absent, returning true when it was added
+   * (claimed) and false when it was already present (replay). Custom stores should
+   * implement this (e.g. Redis SET NX) — without it the bridge falls back to a
+   * non-atomic has()+add(), which leaves a small window where concurrent requests
+   * carrying the same payment header can both pass the replay check.
+   */
+  addIfAbsent?(signature: string, ttlMs?: number): Promise<boolean> | boolean
+  /**
+   * Remove a signature. Used to release a claimed v2 payment header when
+   * verification or blocking settlement fails (no funds moved, no content served),
+   * so the client can safely retry the identical signed transaction. Without it,
+   * a transient facilitator failure permanently burns the header for the TTL.
+   */
+  delete?(signature: string): Promise<void> | void
 }
 
 /**
@@ -25,6 +40,18 @@ export class InMemorySignatureStore implements SignatureStore {
 
   add(signature: string, ttlMs = 3600000): void {
     this.signatures.set(signature, Date.now() + ttlMs)
+  }
+
+  addIfAbsent(signature: string, ttlMs = 3600000): boolean {
+    if (this.signatures.has(signature)) {
+      return false
+    }
+    this.signatures.set(signature, Date.now() + ttlMs)
+    return true
+  }
+
+  delete(signature: string): void {
+    this.signatures.delete(signature)
   }
 
   private cleanup(): void {
@@ -87,6 +114,15 @@ export interface SolanaPayX402Config {
   message?: string
   /** Enable automatic settlement via facilitator (default: true) */
   autoSettle?: boolean
+  /**
+   * Controls whether facilitator settlement (x402 v2 flow) blocks the response.
+   * - 'blocking' (default): await facilitator settlement before running the protected
+   *   handler. If settlement fails, the request is rejected with a 402 instead of the
+   *   handler ever running — funds and content stay in sync.
+   * - 'async': fire-and-forget settlement (legacy behavior). The handler runs immediately
+   *   after verification, and settlement failures are only observable via `onSettlementFailed`.
+   */
+  settlementMode?: 'blocking' | 'async'
   /** Signature store for replay attack prevention */
   signatureStore?: SignatureStore
   /** Accept multiple tokens. First entry is primary (used for Solana Pay QR).
@@ -146,3 +182,15 @@ export interface PaymentVerification {
   /** Settlement transaction signature (if auto-settled) */
   settlementSignature?: string
 }
+
+/**
+ * Result of a settlement attempt.
+ * - 'settled': funds moved (or, for Solana Pay, were already on-chain). `signature` may be
+ *   null if the facilitator did not return a transaction signature.
+ * - 'skipped': settlement was not attempted because `autoSettle` is disabled.
+ * - 'failed': settlement was attempted but did not succeed.
+ */
+export type SettlementResult =
+  | { status: 'settled'; signature: string | null }
+  | { status: 'skipped' }
+  | { status: 'failed'; error: string }

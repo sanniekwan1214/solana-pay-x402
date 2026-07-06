@@ -1,28 +1,20 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest'
 import type { Request, Response, NextFunction } from 'express'
 
+// Hoisted so individual tests can override verifyPayment/settlePayment behavior
+// (e.g. simulate a facilitator settlement failure) while sharing the same mock
+// instance across every `new SolanaPayX402Bridge(...)` created in a test.
+const x402Mocks = vi.hoisted(() => ({
+  createPaymentRequirements: vi.fn(),
+  create402Response: vi.fn(),
+  extractPayment: vi.fn(),
+  verifyPayment: vi.fn(),
+  settlePayment: vi.fn(),
+}))
+
 // Mock x402-solana before importing middleware
 vi.mock('x402-solana/server', () => ({
-  X402PaymentHandler: vi.fn().mockImplementation(() => ({
-    createPaymentRequirements: vi.fn().mockResolvedValue({
-      scheme: 'exact',
-      network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-      amount: '100000',
-      payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
-      maxTimeoutSeconds: 300,
-      asset: 'So11111111111111111111111111111111111111112',
-      extra: {},
-    }),
-    create402Response: vi.fn().mockReturnValue({
-      status: 402,
-      body: { x402Version: 2, accepts: [], resource: {} },
-    }),
-    extractPayment: vi.fn().mockImplementation((headers) => {
-      return headers['payment-signature'] || headers['PAYMENT-SIGNATURE'] || null
-    }),
-    verifyPayment: vi.fn().mockResolvedValue({ isValid: true }),
-    settlePayment: vi.fn().mockResolvedValue({ success: true, transaction: 'tx-sig' }),
-  })),
+  X402PaymentHandler: vi.fn().mockImplementation(() => x402Mocks),
 }))
 
 vi.mock('@solana/pay', () => ({
@@ -46,6 +38,25 @@ describe('solanaPay402 middleware', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+
+    x402Mocks.createPaymentRequirements.mockResolvedValue({
+      scheme: 'exact',
+      network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+      amount: '100000',
+      payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
+      maxTimeoutSeconds: 300,
+      asset: 'So11111111111111111111111111111111111111112',
+      extra: {},
+    })
+    x402Mocks.create402Response.mockReturnValue({
+      status: 402,
+      body: { x402Version: 2, accepts: [], resource: {} },
+    })
+    x402Mocks.extractPayment.mockImplementation((headers) => {
+      return headers['payment-signature'] || headers['PAYMENT-SIGNATURE'] || null
+    })
+    x402Mocks.verifyPayment.mockResolvedValue({ isValid: true })
+    x402Mocks.settlePayment.mockResolvedValue({ success: true, transaction: 'tx-sig' })
 
     mockReq = {
       headers: {},
@@ -135,6 +146,217 @@ describe('solanaPay402 middleware', () => {
 
       const paymentInfo = getPaymentInfo(mockReq as Request)
       expect(paymentInfo).toBeDefined()
+    })
+
+    it('blocks on settlement by default and records the settlement signature', async () => {
+      mockReq.headers = { 'payment-signature': makeV2PaymentHeader() }
+
+      const middleware = solanaPay402(baseOptions)
+      await middleware(mockReq as Request, mockRes as Response, mockNext)
+
+      expect(x402Mocks.settlePayment).toHaveBeenCalled()
+      expect(mockNext).toHaveBeenCalled()
+      expect(mockRes.status).not.toHaveBeenCalledWith(402)
+      const paymentInfo = getPaymentInfo(mockReq as Request)
+      expect(paymentInfo?.settlementSignature).toBe('tx-sig')
+    })
+  })
+
+  describe('settlement failure handling (blocking mode, default)', () => {
+    const makeV2PaymentHeader = () => Buffer.from(JSON.stringify({
+      x402Version: 2,
+      resource: { url: 'http://localhost:3000/api/test' },
+      accepted: {
+        scheme: 'exact',
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        amount: '100000',
+        payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
+        maxTimeoutSeconds: 300,
+        asset: 'So11111111111111111111111111111111111111112',
+        extra: {},
+      },
+      payload: { transaction: 'base64-signed-tx' },
+    })).toString('base64')
+
+    it('returns 402 and does not call next() when facilitator settlement reports failure', async () => {
+      x402Mocks.settlePayment.mockResolvedValueOnce({ success: false, errorReason: 'blockhash_expired' })
+      const onSettlementFailed = vi.fn()
+      mockReq.headers = { 'payment-signature': makeV2PaymentHeader() }
+
+      const middleware = solanaPay402({ ...baseOptions, onSettlementFailed })
+      await middleware(mockReq as Request, mockRes as Response, mockNext)
+
+      expect(mockRes.status).toHaveBeenCalledWith(402)
+      expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        error: 'Payment settlement failed',
+      }))
+      expect(onSettlementFailed).toHaveBeenCalledWith(mockReq, 'blockhash_expired')
+      expect(mockNext).not.toHaveBeenCalled()
+    })
+
+    it('returns 402 and does not call next() when settlePayment rejects', async () => {
+      x402Mocks.settlePayment.mockRejectedValueOnce(new Error('facilitator unreachable'))
+      const onSettlementFailed = vi.fn()
+      mockReq.headers = { 'payment-signature': makeV2PaymentHeader() }
+
+      const middleware = solanaPay402({ ...baseOptions, onSettlementFailed })
+      await middleware(mockReq as Request, mockRes as Response, mockNext)
+
+      expect(mockRes.status).toHaveBeenCalledWith(402)
+      expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        error: 'Payment settlement failed',
+        message: 'facilitator unreachable',
+      }))
+      expect(onSettlementFailed).toHaveBeenCalledWith(mockReq, 'facilitator unreachable')
+      expect(mockNext).not.toHaveBeenCalled()
+    })
+
+    it('releases replay protection on settlement failure so the identical header can be retried', async () => {
+      x402Mocks.settlePayment.mockResolvedValueOnce({ success: false, errorReason: 'blockhash_expired' })
+      const header = makeV2PaymentHeader()
+      const middleware = solanaPay402(baseOptions)
+
+      mockReq.headers = { 'payment-signature': header }
+      await middleware(mockReq as Request, mockRes as Response, mockNext)
+
+      expect(mockRes.status).toHaveBeenCalledWith(402)
+      expect(mockNext).not.toHaveBeenCalled()
+
+      // Same signed transaction retried — the only double-payment-safe retry.
+      // Settlement now succeeds (mock default), so the request must go through
+      // instead of being rejected as a replay.
+      const retryReq: Partial<Request> = {
+        headers: { 'payment-signature': header },
+        path: '/api/test',
+        protocol: 'http',
+        get: vi.fn().mockReturnValue('localhost:3000'),
+        params: {},
+      }
+      const retryRes: Partial<Response> = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+        setHeader: vi.fn(),
+      }
+      const retryNext = vi.fn()
+
+      await middleware(retryReq as Request, retryRes as Response, retryNext)
+
+      expect(retryNext).toHaveBeenCalled()
+      expect(retryRes.status).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('settlementMode: async', () => {
+    const makeV2PaymentHeader = () => Buffer.from(JSON.stringify({
+      x402Version: 2,
+      resource: { url: 'http://localhost:3000/api/test' },
+      accepted: {
+        scheme: 'exact',
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        amount: '100000',
+        payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
+        maxTimeoutSeconds: 300,
+        asset: 'So11111111111111111111111111111111111111112',
+        extra: {},
+      },
+      payload: { transaction: 'base64-signed-tx' },
+    })).toString('base64')
+
+    it('calls next() immediately and reports settlement failure asynchronously', async () => {
+      x402Mocks.settlePayment.mockResolvedValueOnce({ success: false, errorReason: 'blockhash_expired' })
+      const onSettlementFailed = vi.fn()
+      mockReq.headers = { 'payment-signature': makeV2PaymentHeader() }
+
+      const middleware = solanaPay402({ ...baseOptions, settlementMode: 'async', onSettlementFailed })
+      await middleware(mockReq as Request, mockRes as Response, mockNext)
+
+      // Handler proceeds immediately, before settlement resolves
+      expect(mockNext).toHaveBeenCalled()
+      expect(mockRes.status).not.toHaveBeenCalledWith(402)
+      expect(onSettlementFailed).not.toHaveBeenCalled()
+
+      // Flush microtasks so the fire-and-forget settlement promise resolves
+      await new Promise((resolve) => setImmediate(resolve))
+
+      expect(onSettlementFailed).toHaveBeenCalledWith(mockReq, 'blockhash_expired')
+    })
+  })
+
+  describe('autoSettle: false', () => {
+    const makeV2PaymentHeader = () => Buffer.from(JSON.stringify({
+      x402Version: 2,
+      resource: { url: 'http://localhost:3000/api/test' },
+      accepted: {
+        scheme: 'exact',
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        amount: '100000',
+        payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
+        maxTimeoutSeconds: 300,
+        asset: 'So11111111111111111111111111111111111111112',
+        extra: {},
+      },
+      payload: { transaction: 'base64-signed-tx' },
+    })).toString('base64')
+
+    it('runs the handler without calling the facilitator settlePayment', async () => {
+      mockReq.headers = { 'payment-signature': makeV2PaymentHeader() }
+
+      const middleware = solanaPay402({ ...baseOptions, autoSettle: false })
+      await middleware(mockReq as Request, mockRes as Response, mockNext)
+
+      expect(mockNext).toHaveBeenCalled()
+      expect(x402Mocks.settlePayment).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('v2 replay protection', () => {
+    const makeV2PaymentHeader = () => Buffer.from(JSON.stringify({
+      x402Version: 2,
+      resource: { url: 'http://localhost:3000/api/test' },
+      accepted: {
+        scheme: 'exact',
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        amount: '100000',
+        payTo: 'ACkPDYU2KiZ6nv24cF7aRu5ePY2jHMfE55YJNcEuVGv8',
+        maxTimeoutSeconds: 300,
+        asset: 'So11111111111111111111111111111111111111112',
+        extra: {},
+      },
+      // Note: this fake transaction payload won't deserialize as a real Solana
+      // transaction, so the sha256-of-header fallback replay key is what's
+      // exercised here — that's expected for this fixture.
+      payload: { transaction: 'base64-signed-tx' },
+    })).toString('base64')
+
+    it('rejects the second use of the same v2 payment header with a 402', async () => {
+      const middleware = solanaPay402(baseOptions)
+      const header = makeV2PaymentHeader()
+
+      mockReq.headers = { 'payment-signature': header }
+      await middleware(mockReq as Request, mockRes as Response, mockNext)
+      expect(mockNext).toHaveBeenCalledTimes(1)
+
+      const secondReq: Partial<Request> = {
+        headers: { 'payment-signature': header },
+        path: '/api/test',
+        protocol: 'http',
+        get: vi.fn().mockReturnValue('localhost:3000'),
+        params: {},
+      }
+      const secondRes: Partial<Response> = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+        setHeader: vi.fn(),
+      }
+      const secondNext = vi.fn()
+
+      await middleware(secondReq as Request, secondRes as Response, secondNext)
+
+      expect(secondNext).not.toHaveBeenCalled()
+      expect(secondRes.status).toHaveBeenCalledWith(402)
+      expect(secondRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('already used'),
+      }))
     })
   })
 
